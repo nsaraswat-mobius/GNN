@@ -1,0 +1,65 @@
+meta:
+  name: "Brick 2 \u2013 Data Preprocessing & Graph Construction"
+  version: '1.0'
+  owner: ml-pipeline
+  description: Configuration for preprocessing raw logs into graph data and temporal
+    sequences for STGNN training.
+inputs:
+  input:
+    source: response.json
+    format: json
+    logs_key: logs
+    timestamp_field: timestamp
+    timestamp_unit: ms
+    value_field: value
+    service_field: serviceName
+    pi_metadata_field: piMetadata
+  output:
+    artifacts:
+    - tensors.node_features
+    - tensors.edge_index
+    - tensors.temporal_sequences
+    - graph
+    - node_features
+    - metadata
+preprocess:
+  normalize_features: true
+  min_sequence_length: 10
+graph:
+  create_temporal_edges: true
+  temporal_window_seconds: 5
+  node_types:
+  - service
+  - entity
+  - transaction
+  edge_types:
+  - structural
+  - temporal
+  node_id_fields:
+    service: serviceName
+    entity: piMetadata.entityId
+    transaction: piMetadata.transactionId
+features:
+  feature_dim: 12
+  stats:
+    value:
+    - mean
+    - std
+    - min
+    - max
+    - count
+  temporal:
+    diff_seconds:
+    - mean
+    - std
+    - count
+  diversity:
+    service_unique_count: true
+  padding: zero
+  truncate: true
+sequences:
+  sequence_length: 50
+  sliding_window: true
+  stride: 12
+logging:
+  level: INFO
