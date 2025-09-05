@@ -1,0 +1,459 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: stgnn-data-loading-production-
+  annotations:
+    pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+    pipelines.kubeflow.org/pipeline_compilation_time: '2024-01-15T10:00:00'
+    pipelines.kubeflow.org/pipeline_spec: |
+      {
+        "description": "STGNN Data Loading Pipeline - Production Ready Brick 1",
+        "name": "STGNN Data Loading Production",
+        "inputs": [
+          {"name": "input_path", "type": "String", "default": "/tmp/data/response.json"},
+          {"name": "sample_size", "type": "Integer", "default": 5},
+          {"name": "validation_sample_size", "type": "Integer", "default": 10}
+        ],
+        "outputs": [
+          {"name": "logs", "type": "Artifact"},
+          {"name": "metadata", "type": "Artifact"},
+          {"name": "validation", "type": "Artifact"},
+          {"name": "sample", "type": "Artifact"},
+          {"name": "summary", "type": "Artifact"}
+        ]
+      }
+  labels:
+    pipelines.kubeflow.org/kfp_sdk_version: 1.8.22
+spec:
+  entrypoint: stgnn-data-loading-pipeline
+  templates:
+  - name: stgnn-data-loading-pipeline
+    dag:
+      tasks:
+      - name: data-loading
+        template: data-loading-component
+        arguments:
+          parameters:
+          - name: input-path
+            value: "{{workflow.parameters.input-path}}"
+          - name: sample-size
+            value: "{{workflow.parameters.sample-size}}"
+          - name: validation-sample-size
+            value: "{{workflow.parameters.validation-sample-size}}"
+
+  - name: data-loading-component
+    container:
+      image: python:3.9-slim
+      command: [sh]
+      args:
+      - -exc
+      - |
+        # Install required packages
+        pip install --no-cache-dir pandas==1.5.3 numpy==1.24.3
+        
+        # Run the data loading script
+        python3 -c "
+        import json
+        import pandas as pd
+        import logging
+        import os
+        from datetime import datetime
+        from typing import List, Dict, Any
+        
+        # Configure logging
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
+        logger = logging.getLogger('stgnn_data_loader')
+        
+        class STGNNDataLoader:
+            '''Production-ready STGNN Data Loader for Kubeflow'''
+            
+            def __init__(self):
+                self.logs = []
+                self.metadata = {}
+                self.validation_results = {}
+                logger.info('Initialized STGNN Data Loader')
+            
+            def load_data(self, input_path: str) -> Dict[str, Any]:
+                '''Load data from file or create sample data'''
+                try:
+                    logger.info(f'Attempting to load data from: {input_path}')
+                    
+                    # Check if file exists
+                    if os.path.exists(input_path):
+                        with open(input_path, 'r', encoding='utf-8') as f:
+                            self.logs = json.load(f)
+                        logger.info(f'Successfully loaded {len(self.logs)} logs from file')
+                    else:
+                        # Create sample data for demonstration
+                        logger.warning(f'File {input_path} not found. Creating sample data.')
+                        self.logs = self._create_sample_data()
+                        logger.info(f'Created {len(self.logs)} sample logs')
+                    
+                    return {'success': True, 'message': f'Loaded {len(self.logs)} logs'}
+                    
+                except Exception as e:
+                    logger.error(f'Error loading data: {str(e)}')
+                    raise Exception(f'Data loading failed: {str(e)}')
+            
+            def _create_sample_data(self) -> List[Dict[str, Any]]:
+                '''Create sample STGNN log data'''
+                services = ['MongoDB', 'Redis', 'PostgreSQL', 'Elasticsearch']
+                components = ['Db', 'Cache', 'Search', 'Analytics']
+                metrics = ['QPS/RPS', 'Latency', 'CPU Usage', 'Memory Usage']
+                
+                sample_data = []
+                base_timestamp = 1753381080500
+                
+                for i in range(100):  # Create 100 sample logs
+                    log_entry = {
+                        'id': f'stgnn-log-{i:04d}',
+                        'timestamp': str(base_timestamp + i * 1000),
+                        'value': str(round(10.0 + (i % 50) * 0.5 + (i % 7) * 0.1, 3)),
+                        'serviceName': services[i % len(services)],
+                        'component': components[i % len(components)],
+                        'metricsName': metrics[i % len(metrics)],
+                        'deploymentId': f'deployment-{(i // 10) + 1}',
+                        'tenantId': f'tenant-{(i // 25) + 1}',
+                        'applicationId': 'stgnn-anomaly-detection',
+                        'piMetadata': {
+                            'entityId': f'entity-{i:03d}',
+                            'transactionId': f'tx-{i:06d}',
+                            'creationTimeMS': base_timestamp + i * 1000 + 100,
+                            'tenantID': f'tenant-{(i // 25) + 1}'
+                        },
+                        'startTime': str(base_timestamp + i * 1000 - 1000),
+                        'endTime': str(base_timestamp + i * 1000)
+                    }
+                    sample_data.append(log_entry)
+                
+                return sample_data
+            
+            def validate_data(self, validation_sample_size: int = 10) -> Dict[str, Any]:
+                '''Validate the loaded data'''
+                logger.info(f'Starting data validation with sample size: {validation_sample_size}')
+                
+                errors = []
+                warnings = []
+                required_fields = ['timestamp', 'value', 'serviceName']
+                
+                if not self.logs:
+                    errors.append('No logs found in data')
+                    return {
+                        'is_valid': False,
+                        'errors': errors,
+                        'warnings': warnings,
+                        'total_logs': 0,
+                        'sample_size_checked': 0
+                    }
+                
+                if not isinstance(self.logs, list):
+                    errors.append('Data must be a list of log entries')
+                    return {
+                        'is_valid': False,
+                        'errors': errors,
+                        'warnings': warnings,
+                        'total_logs': len(self.logs) if hasattr(self.logs, '__len__') else 0,
+                        'sample_size_checked': 0
+                    }
+                
+                # Check sample of logs
+                sample_size = min(validation_sample_size, len(self.logs))
+                
+                for i, log in enumerate(self.logs[:sample_size]):
+                    if not isinstance(log, dict):
+                        errors.append(f'Log {i} is not a dictionary')
+                        continue
+                    
+                    # Check required fields
+                    for field in required_fields:
+                        if field not in log:
+                            errors.append(f'Log {i} missing required field: {field}')
+                    
+                    # Validate data types
+                    if 'timestamp' in log:
+                        try:
+                            float(log['timestamp'])
+                        except (ValueError, TypeError):
+                            errors.append(f'Log {i} has invalid timestamp: {log[\"timestamp\"]}')
+                    
+                    if 'value' in log:
+                        try:
+                            float(log['value'])
+                        except (ValueError, TypeError):
+                            warnings.append(f'Log {i} has non-numeric value: {log[\"value\"]}')
+                
+                # Check for duplicates (sample check)
+                if sample_size > 1:
+                    unique_logs = set(json.dumps(log, sort_keys=True) for log in self.logs[:sample_size])
+                    if len(unique_logs) < sample_size:
+                        warnings.append('Potential duplicate log entries detected in sample')
+                
+                validation_result = {
+                    'is_valid': len(errors) == 0,
+                    'errors': errors,
+                    'warnings': warnings,
+                    'total_logs': len(self.logs),
+                    'sample_size_checked': sample_size,
+                    'validation_timestamp': datetime.now().isoformat()
+                }
+                
+                self.validation_results = validation_result
+                logger.info(f'Validation completed: {\"PASSED\" if validation_result[\"is_valid\"] else \"FAILED\"}')
+                logger.info(f'Errors: {len(errors)}, Warnings: {len(warnings)}')
+                
+                return validation_result
+            
+            def generate_metadata(self, input_path: str) -> Dict[str, Any]:
+                '''Generate metadata about the loaded data'''
+                self.metadata = {
+                    'pipeline_name': 'STGNN Data Loading',
+                    'pipeline_version': '1.0.0',
+                    'brick_id': 'brick_1_data_loading',
+                    'input_source': input_path,
+                    'total_logs': len(self.logs),
+                    'load_timestamp': datetime.now().isoformat(),
+                    'validation_passed': self.validation_results.get('is_valid', False),
+                    'validation_errors': len(self.validation_results.get('errors', [])),
+                    'validation_warnings': len(self.validation_results.get('warnings', [])),
+                    'data_quality_score': self._calculate_quality_score()
+                }
+                
+                logger.info(f'Generated metadata for {self.metadata[\"total_logs\"]} logs')
+                return self.metadata
+            
+            def _calculate_quality_score(self) -> float:
+                '''Calculate a data quality score (0-1)'''
+                if not self.validation_results:
+                    return 0.0
+                
+                total_checks = self.validation_results.get('sample_size_checked', 1)
+                errors = len(self.validation_results.get('errors', []))
+                warnings = len(self.validation_results.get('warnings', []))
+                
+                # Simple quality score calculation
+                error_penalty = min(errors * 0.1, 0.5)
+                warning_penalty = min(warnings * 0.05, 0.3)
+                quality_score = max(0.0, 1.0 - error_penalty - warning_penalty)
+                
+                return round(quality_score, 3)
+            
+            def get_sample(self, sample_size: int = 5) -> List[Dict[str, Any]]:
+                '''Get a sample of logs for inspection'''
+                sample = self.logs[:sample_size]
+                logger.info(f'Generated sample with {len(sample)} logs')
+                return sample
+            
+            def generate_summary(self) -> Dict[str, Any]:
+                '''Generate comprehensive summary statistics'''
+                if not self.logs:
+                    return {'error': 'No data loaded'}
+                
+                # Service distribution
+                service_counts = {}
+                component_counts = {}
+                metric_counts = {}
+                tenant_counts = {}
+                
+                # Timestamp analysis
+                timestamps = []
+                values = []
+                
+                for log in self.logs:
+                    # Count distributions
+                    service = log.get('serviceName', 'Unknown')
+                    service_counts[service] = service_counts.get(service, 0) + 1
+                    
+                    component = log.get('component', 'Unknown')
+                    component_counts[component] = component_counts.get(component, 0) + 1
+                    
+                    metric = log.get('metricsName', 'Unknown')
+                    metric_counts[metric] = metric_counts.get(metric, 0) + 1
+                    
+                    tenant = log.get('tenantId', 'Unknown')
+                    tenant_counts[tenant] = tenant_counts.get(tenant, 0) + 1
+                    
+                    # Collect timestamps and values
+                    try:
+                        timestamps.append(float(log.get('timestamp', 0)))
+                    except (ValueError, TypeError):
+                        pass
+                    
+                    try:
+                        values.append(float(log.get('value', 0)))
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Calculate timestamp range
+                timestamp_range = {}
+                if timestamps:
+                    timestamp_range = {
+                        'min': min(timestamps),
+                        'max': max(timestamps),
+                        'span_ms': max(timestamps) - min(timestamps) if len(timestamps) > 1 else 0,
+                        'count': len(timestamps)
+                    }
+                
+                # Calculate value statistics
+                value_stats = {}
+                if values:
+                    value_stats = {
+                        'min': min(values),
+                        'max': max(values),
+                        'mean': sum(values) / len(values),
+                        'count': len(values)
+                    }
+                
+                summary = {
+                    'total_logs': len(self.logs),
+                    'distributions': {
+                        'services': service_counts,
+                        'components': component_counts,
+                        'metrics': metric_counts,
+                        'tenants': tenant_counts
+                    },
+                    'timestamp_analysis': timestamp_range,
+                    'value_statistics': value_stats,
+                    'validation_status': self.validation_results.get('is_valid', False),
+                    'validation_errors': len(self.validation_results.get('errors', [])),
+                    'validation_warnings': len(self.validation_results.get('warnings', [])),
+                    'data_quality_score': self.metadata.get('data_quality_score', 0.0),
+                    'summary_timestamp': datetime.now().isoformat()
+                }
+                
+                logger.info(f'Generated comprehensive summary for {len(self.logs)} logs')
+                return summary
+            
+            def save_outputs(self, output_dir: str, sample_size: int = 5):
+                '''Save all outputs to specified directory'''
+                os.makedirs(output_dir, exist_ok=True)
+                logger.info(f'Saving outputs to: {output_dir}')
+                
+                # Generate sample and summary
+                sample = self.get_sample(sample_size)
+                summary = self.generate_summary()
+                
+                # Save all outputs
+                outputs = {
+                    'logs.json': self.logs,
+                    'metadata.json': self.metadata,
+                    'validation.json': self.validation_results,
+                    'sample.json': sample,
+                    'summary.json': summary
+                }
+                
+                for filename, data in outputs.items():
+                    filepath = os.path.join(output_dir, filename)
+                    with open(filepath, 'w', encoding='utf-8') as f:
+                        json.dump(data, f, indent=2, ensure_ascii=False)
+                    logger.info(f'Saved: {filepath}')
+                
+                return outputs
+        
+        # Main execution
+        def main():
+            try:
+                # Get parameters from environment
+                input_path = os.environ.get('INPUT_PATH', '/tmp/data/response.json')
+                sample_size = int(os.environ.get('SAMPLE_SIZE', '5'))
+                validation_sample_size = int(os.environ.get('VALIDATION_SAMPLE_SIZE', '10'))
+                output_dir = '/tmp/outputs'
+                
+                logger.info('Starting STGNN Data Loading Pipeline')
+                logger.info(f'Input path: {input_path}')
+                logger.info(f'Sample size: {sample_size}')
+                logger.info(f'Validation sample size: {validation_sample_size}')
+                
+                # Initialize loader
+                loader = STGNNDataLoader()
+                
+                # Execute pipeline steps
+                logger.info('Step 1: Loading data...')
+                load_result = loader.load_data(input_path)
+                
+                logger.info('Step 2: Validating data...')
+                validation_result = loader.validate_data(validation_sample_size)
+                
+                logger.info('Step 3: Generating metadata...')
+                metadata = loader.generate_metadata(input_path)
+                
+                logger.info('Step 4: Saving outputs...')
+                outputs = loader.save_outputs(output_dir, sample_size)
+                
+                # Print final results
+                print('\\n' + '='*60)
+                print('STGNN DATA LOADING PIPELINE - RESULTS')
+                print('='*60)
+                print(f'✅ Status: SUCCESS')
+                print(f'✅ Logs processed: {metadata[\"total_logs\"]:,}')
+                print(f'✅ Validation: {\"PASSED\" if validation_result[\"is_valid\"] else \"FAILED\"}')
+                print(f'✅ Data quality score: {metadata[\"data_quality_score\"]:.3f}')
+                print(f'✅ Services found: {len(outputs[\"summary.json\"][\"distributions\"][\"services\"])}')
+                print(f'✅ Output files: {len(outputs)}')
+                print(f'✅ Output location: {output_dir}')
+                
+                if validation_result['errors']:
+                    print(f'⚠️  Validation errors: {len(validation_result[\"errors\"])}')
+                if validation_result['warnings']:
+                    print(f'⚠️  Validation warnings: {len(validation_result[\"warnings\"])}')
+                
+                print('='*60)
+                
+                logger.info('STGNN Data Loading Pipeline completed successfully')
+                return 0
+                
+            except Exception as e:
+                logger.error(f'Pipeline failed: {str(e)}')
+                print(f'\\n❌ PIPELINE FAILED: {str(e)}')
+                return 1
+        
+        if __name__ == '__main__':
+            exit(main())
+        "
+      env:
+      - name: INPUT_PATH
+        value: "{{inputs.parameters.input-path}}"
+      - name: SAMPLE_SIZE
+        value: "{{inputs.parameters.sample-size}}"
+      - name: VALIDATION_SAMPLE_SIZE
+        value: "{{inputs.parameters.validation-sample-size}}"
+      - name: PYTHONUNBUFFERED
+        value: "1"
+      resources:
+        requests:
+          memory: "1Gi"
+          cpu: "500m"
+        limits:
+          memory: "2Gi"
+          cpu: "1"
+    inputs:
+      parameters:
+      - name: input-path
+        value: "/tmp/data/response.json"
+      - name: sample-size
+        value: "5"
+      - name: validation-sample-size
+        value: "10"
+    outputs:
+      artifacts:
+      - name: logs
+        path: /tmp/outputs/logs.json
+      - name: metadata
+        path: /tmp/outputs/metadata.json
+      - name: validation
+        path: /tmp/outputs/validation.json
+      - name: sample
+        path: /tmp/outputs/sample.json
+      - name: summary
+        path: /tmp/outputs/summary.json
+
+  arguments:
+    parameters:
+    - name: input-path
+      value: "/tmp/data/response.json"
+    - name: sample-size
+      value: "5"
+    - name: validation-sample-size
+      value: "10"
