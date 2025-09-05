@@ -1,0 +1,102 @@
+# brick_1_data_loading.yaml
+# BRICK 1: DATA LOADING — YAML CONFIG
+
+brick:
+  name: data_loading
+  version: 1
+  description: |
+    Load JSON log records, run lightweight validation, generate metadata,
+    a small sample for inspection, and a summary (counts & timestamp span).
+
+# ---- Parameters you will usually edit ----
+parameters:
+  input_path: "data/response.json"        # <-- change this to your JSON path
+  encoding: "utf-8"
+  required_fields: ["timestamp", "value", "serviceName"]
+  validate_sample_size: 10                # check first N logs for fields/types
+  sample_size: 5                          # number of rows to preview in sample
+  check_duplicates: true
+
+# ---- Optional schema hints (used by validation/summarize) ----
+schema:
+  fields:
+    timestamp:
+      type: number        # string or number convertible to float
+      required: true
+    value:
+      type: number
+      required: true
+    serviceName:
+      type: string
+      required: true
+    # Add any extra fields you expect; not required for the brick to run.
+
+# ---- Where to write outputs ----
+outputs:
+  dir: "artifacts/brick_1"
+  files:
+    logs_json:        "${outputs.dir}/logs.json"
+    metadata_json:    "${outputs.dir}/metadata.json"
+    validation_json:  "${outputs.dir}/validation.json"
+    sample_json:      "${outputs.dir}/sample.json"
+    summary_json:     "${outputs.dir}/summary.json"
+
+# ---- Steps (mirror the Python methods) ----
+steps:
+  - id: load_json
+    action: read_json
+    args:
+      path: "${parameters.input_path}"
+      encoding: "${parameters.encoding}"
+    save_as: logs
+
+  - id: validate
+    action: validate_logs
+    args:
+      logs:        "${steps.load_json.output}"
+      required:    "${parameters.required_fields}"
+      sample_size: "${parameters.validate_sample_size}"
+      check_dups:  "${parameters.check_duplicates}"
+    save_as: validation
+
+  - id: build_metadata
+    action: make_metadata
+    args:
+      file_path:      "${parameters.input_path}"
+      total_logs:     "${steps.load_json.count}"
+      load_timestamp: "NOW"     # your runner should resolve this to ISO8601
+      validation:     "${steps.validate.output}"
+    save_as: metadata
+
+  - id: make_sample
+    action: slice_first_n
+    args:
+      data: "${steps.load_json.output}"
+      n:    "${parameters.sample_size}"
+    save_as: sample
+
+  - id: summarize
+    action: summarize_logs
+    args:
+      logs: "${steps.load_json.output}"
+      by_service_field: "serviceName"
+      timestamp_field:  "timestamp"
+    save_as: summary
+
+  - id: write_artifacts
+    action: write_files
+    args:
+      mapping:
+        "${outputs.files.logs_json}":       "${steps.load_json.output}"
+        "${outputs.files.metadata_json}":   "${steps.build_metadata.output}"
+        "${outputs.files.validation_json}": "${steps.validate.output}"
+        "${outputs.files.sample_json}":     "${steps.make_sample.output}"
+        "${outputs.files.summary_json}":    "${steps.summarize.output}"
+
+# ---- Return values if your runner surfaces them to the next brick ----
+returns:
+  logs:        "${steps.load_json.output}"
+  metadata:    "${steps.build_metadata.output}"
+  validation:  "${steps.validate.output}"
+  sample:      "${steps.make_sample.output}"
+  summary:     "${steps.summarize.output}"
