@@ -94,7 +94,7 @@ implementation:
         with open(args.anomaly_data, "wb") as f:
             pickle.dump(test_labels, f)
         
-        print("✅ Successfully processed and saved dataset (from API).")
+        print(" Successfully processed and saved dataset (from API).")
     args:
       - --api_url
       - {inputValue: api_url}
