@@ -99,7 +99,7 @@ implementation:
       - --api_url
       - {inputValue: api_url}
       - --access_token
-      - {inputpath: access_token}
+      - {inputPath: access_token}
       - --train_data
       - {outputPath: train_data}
       - --test_data
