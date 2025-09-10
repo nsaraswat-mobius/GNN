@@ -62,9 +62,11 @@ implementation:
         
         df = pd.DataFrame(raw_data)
         
-        # Flatten nested piMetadata dictionary into separate columns
+        # Flatten nested piMetadata dictionary into separate columns (preserve required fields)
         if "piMetadata" in df.columns:
             metadata_df = pd.json_normalize(df["piMetadata"])
+            keep_cols = ["creationTimeMS", "transactionId", "entityId", "tenantID"]
+            metadata_df = metadata_df[keep_cols]  # keep only selected keys
             metadata_df.columns = [f"piMetadata.{col}" for col in metadata_df.columns]
             df = pd.concat([df.drop(columns=["piMetadata"]), metadata_df], axis=1)
         
@@ -112,3 +114,4 @@ implementation:
       - {outputPath: test_data}
       - --anomaly_data
       - {outputPath: anomaly_data}
+
