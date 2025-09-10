@@ -1,5 +1,5 @@
 name: Load JSON dataset with anomaly detection
-description: Fetches JSON from API.
+description: Fetches JSON from API and prepares train/test/anomaly datasets with float-only features.
 inputs:
   - {name: api_url, type: String, description: 'API URL to fetch JSON dataset'}
   - {name: access_token, type: string, description: 'Bearer access token for API auth'}
@@ -23,14 +23,12 @@ implementation:
       - |
         import argparse
         import os
-        import json
         import pickle
         import pandas as pd
         import numpy as np
         import requests
         from sklearn.model_selection import train_test_split
-        from sklearn.preprocessing import MinMaxScaler
-        
+
         parser = argparse.ArgumentParser()
         parser.add_argument('--api_url', type=str, required=True, help='API URL to fetch JSON dataset')
         parser.add_argument('--access_token', type=str, required=True, help='Bearer token for API')
@@ -38,6 +36,7 @@ implementation:
         parser.add_argument('--test_data', type=str, required=True, help='Path to output test dataset')
         parser.add_argument('--anomaly_data', type=str, required=True, help='Path to output anomaly labels')
         args = parser.parse_args()
+
         with open(args.access_token, 'r') as f:
             access_token = f.read().strip()
         
@@ -62,27 +61,22 @@ implementation:
         
         df = pd.DataFrame(raw_data)
         
-        # Flatten nested piMetadata dictionary into separate columns (preserve required fields)
-        if "piMetadata" in df.columns:
-            metadata_df = pd.json_normalize(df["piMetadata"])
-            keep_cols = ["creationTimeMS", "transactionId", "entityId", "tenantID"]
-            metadata_df = metadata_df[keep_cols]  # keep only selected keys
-            metadata_df.columns = [f"piMetadata.{col}" for col in metadata_df.columns]
-            df = pd.concat([df.drop(columns=["piMetadata"]), metadata_df], axis=1)
+        # Drop unwanted columns
+        drop_cols = ["piMetadata", "execution_timestamp", "pipelineid", "component_id", "projectid"]
+        df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
         
         # Convert numeric columns properly
         numeric_cols = ["endpoint_count", "reachable_frac", "deg_cent", "betw_cent", "clustering", "pagerank"]
         for col in numeric_cols:
             df[col] = pd.to_numeric(df[col], errors="coerce")
         
+        # Keep only numeric float features
+        df = df[numeric_cols]
+        
         # Handle anomalies: reachable_frac == 0.0 → anomaly=1
         anomaly_labels = (df["reachable_frac"] == 0.0).astype(np.int32)
         
-        # Normalize selected features
-        scaler = MinMaxScaler()
-        df[numeric_cols] = scaler.fit_transform(df[numeric_cols])
-        
-        # Train-test split
+        # Train-test split (no normalization)
         train_df, test_df, train_labels, test_labels = train_test_split(
             df, anomaly_labels, test_size=0.2, random_state=42, stratify=anomaly_labels
         )
@@ -102,7 +96,7 @@ implementation:
         with open(args.anomaly_data, "wb") as f:
             pickle.dump(test_labels, f)
         
-        print(" Successfully processed and saved dataset (from API).")
+        print(f" Successfully processed and saved dataset (from API).")
     args:
       - --api_url
       - {inputValue: api_url}
