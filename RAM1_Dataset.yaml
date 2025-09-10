@@ -14,8 +14,8 @@ implementation:
       - sh
       - -c
       - |
-        python3 -m pip install --quiet requests pandas || \
-        python3 -m pip install --quiet requests pandas --user
+        python3 -m pip install --quiet requests pandas scikit-learn || \
+        python3 -m pip install --quiet requests pandas scikit-learn --user
         exec "$0" "$@"
       - python3
       - -u
