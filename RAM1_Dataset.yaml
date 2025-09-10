@@ -2,7 +2,7 @@ name: Load JSON dataset with anomaly detection
 description: Fetches JSON from API.
 inputs:
   - {name: api_url, type: String, description: 'API URL to fetch JSON dataset'}
-  - {name: access_token, type: String, description: 'Bearer access token for API auth'}
+  - {name: access_token, type: string, description: 'Bearer access token for API auth'}
 outputs:
   - {name: train_data, type: Dataset}
   - {name: test_data, type: Dataset}
@@ -32,11 +32,13 @@ implementation:
         parser.add_argument('--test_data', type=str, required=True, help='Path to output test dataset')
         parser.add_argument('--anomaly_data', type=str, required=True, help='Path to output anomaly labels')
         args = parser.parse_args()
+        with open(args.access_token, 'r') as f:
+            access_token = f.read().strip()
         
         # Fetch dataset from API
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {args.access_token}"
+            "Authorization": f"Bearer {access_token}"
         }
         payload = {
             "dbType": "TIDB",
@@ -97,7 +99,7 @@ implementation:
       - --api_url
       - {inputValue: api_url}
       - --access_token
-      - {inputValue: access_token}
+      - {inputpath: access_token}
       - --train_data
       - {outputPath: train_data}
       - --test_data
