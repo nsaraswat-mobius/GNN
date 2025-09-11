@@ -1,5 +1,5 @@
 name: Load JSON dataset with anomaly detection
-description: Fetches JSON from API and prepares train/test/anomaly datasets with float-only features.
+description: Fetches JSON from API and prepares train/test/anomaly datasets with all numeric factors (ratios, conditions, closeness, clustering, etc.).
 inputs:
   - {name: api_url, type: String, description: 'API URL to fetch JSON dataset'}
   - {name: access_token, type: string, description: 'Bearer access token for API auth'}
@@ -37,14 +37,12 @@ implementation:
         parser.add_argument('--anomaly_data', type=str, required=True, help='Path to output anomaly labels')
         args = parser.parse_args()
 
+        # Read access token
         with open(args.access_token, 'r') as f:
             access_token = f.read().strip()
-        
-        # Fetch dataset from API
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {access_token}"
-        }
+
+        # Fetch dataset
+        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {access_token}"}
         payload = {
             "dbType": "TIDB",
             "entityId": "",
@@ -58,45 +56,45 @@ implementation:
         resp = requests.post(args.api_url, headers=headers, json=payload)
         resp.raise_for_status()
         raw_data = resp.json()
-        
+
+        # Convert to DataFrame
         df = pd.DataFrame(raw_data)
-        
-        # Drop unwanted columns
-        drop_cols = ["piMetadata", "execution_timestamp", "pipelineid", "component_id", "projectid"]
+
+        # Drop metadata-like columns (keep all numeric factors)
+        drop_cols = ["piMetadata", "execution_timestamp", "projectid"]
         df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
-        
-        # Convert numeric columns properly
-        numeric_cols = ["endpoint_count", "reachable_frac", "deg_cent", "betw_cent", "clustering", "pagerank"]
-        for col in numeric_cols:
+
+        # Convert everything to numeric where possible
+        for col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
-        
-        # Keep only numeric float features
-        df = df[numeric_cols]
-        
-        # Handle anomalies: reachable_frac == 0.0 → anomaly=1
-        anomaly_labels = (df["reachable_frac"] == 0.0).astype(np.int32)
-        
-        # Train-test split (no normalization)
+
+        # Fill NaNs with 0 (safe handling)
+        df = df.fillna(0.0)
+
+        # Define anomaly rule: cond_Ready == 0 → anomaly
+        anomaly_labels = (df.get("cond_Ready", pd.Series([0]*len(df))) == 0).astype(np.int32)
+
+        # Train-test split
         train_df, test_df, train_labels, test_labels = train_test_split(
             df, anomaly_labels, test_size=0.2, random_state=42, stratify=anomaly_labels
         )
-        
-        # Save train data
+
+        # Save train
         os.makedirs(os.path.dirname(args.train_data) or ".", exist_ok=True)
         with open(args.train_data, "wb") as f:
             pickle.dump(train_df, f)
-        
-        # Save test data
+
+        # Save test
         os.makedirs(os.path.dirname(args.test_data) or ".", exist_ok=True)
         with open(args.test_data, "wb") as f:
             pickle.dump(test_df, f)
-        
-        # Save anomaly labels for test set
+
+        # Save anomaly labels
         os.makedirs(os.path.dirname(args.anomaly_data) or ".", exist_ok=True)
         with open(args.anomaly_data, "wb") as f:
             pickle.dump(test_labels, f)
-        
-        print(f" Successfully processed and saved dataset (from API).")
+
+        print("✅ Successfully processed and saved dataset with dynamic factor handling.")
     args:
       - --api_url
       - {inputValue: api_url}
