@@ -14,6 +14,9 @@ implementation:
         exec "$0" "$@"
       - python3
       - -u
+      - main.py
+      - --PPIc_data
+      - /tmp/inputs/PPI_data/data.json
       - -c
       - |
         import argparse
