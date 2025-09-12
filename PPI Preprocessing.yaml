@@ -68,7 +68,7 @@ implementation:
         try:
             with open(args.PPI_data, "rb") as f:
                 data = pickle.load(f)
-            print(f"Successfully loaded data from {args.elliptic_data}")
+            print(f"Successfully loaded data from {args.PPI_data}")
             print(f"Data type: {type(data)}")
             if hasattr(data, 'y'):
                 print(f"Labels shape: {data.y.shape}")
