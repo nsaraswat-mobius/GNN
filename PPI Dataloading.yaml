@@ -28,7 +28,7 @@ implementation:
         args = parser.parse_args()
         
         print(f"[INFO] Loading Elliptic Bitcoin Dataset...")
-        dataset = PPIDataset(root='/tmp/PPI')
+        dataset = PPI(root='/tmp/PPI')
         data = dataset[0]
         
         print(f"[INFO] Dataset loaded successfully")
