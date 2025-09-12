@@ -1,5 +1,5 @@
 name: Load JSON dataset with anomaly detection
-description: Fetches JSON from API and prepares train/test/anomaly datasets with ratios, conditions, closeness, and clustering parameters.
+description: Fetches JSON from API and prepares train/test/anomaly datasets with ratios, capacities, and graph metrics.
 inputs:
   - {name: api_url, type: String, description: 'API URL to fetch JSON dataset'}
   - {name: access_token, type: string, description: 'Bearer access token for API auth'}
@@ -62,20 +62,20 @@ implementation:
 
         # Keep only numeric factor columns
         keep_cols = [
-            "ratio_cpu", "ratio_memory", "ratio_pods", "ratio_storage",
-            "cond_DiskPressure", "cond_MemoryPressure", "cond_NetworkUnavailable",
-            "cond_PIDPressure", "cond_Ready",
-            "closeness", "clustering"
+            "ratio_cpu", "ratio_memory", "ratio_storage", "ratio_longhornstorage",
+            "totalcapacity_cpu", "totalcapacity_memory", "totalcapacity_storage", "totalcapacity_longhornstorage",
+            "totalallocatable_cpu", "totalallocatable_memory", "totalallocatable_storage", "totalallocatable_longhornstorage",
+            "pagerank", "weighted_degree", "capacity_assortativity"
         ]
         df = df[[c for c in keep_cols if c in df.columns]]
 
-        # Convert everything to numeric
+        # Convert everything to numeric (strip units like 'GB' or 'c')
         for col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+            df[col] = pd.to_numeric(df[col].astype(str).str.replace(r'[^0-9.\-]', '', regex=True), errors="coerce")
         df = df.fillna(0.0)
 
-        # Define anomaly rule: cond_Ready == 0 → anomaly
-        anomaly_labels = (df.get("cond_Ready", pd.Series([0]*len(df))) == 0).astype(np.int32)
+        # Define anomaly rule: very simple for now (pagerank == 0 => anomaly)
+        anomaly_labels = (df.get("pagerank", pd.Series([0]*len(df))) == 0).astype(np.int32)
 
         # Train-test split
         train_df, test_df, train_labels, test_labels = train_test_split(
@@ -97,7 +97,7 @@ implementation:
         with open(args.anomaly_data, "wb") as f:
             pickle.dump(test_labels, f)
 
-        print("✅ Successfully processed dataset with ratios, conditions, closeness, and clustering.")
+        print("✅ Successfully processed dataset with ratios, capacities, and graph metrics.")
     args:
       - --api_url
       - {inputValue: api_url}
