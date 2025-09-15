@@ -3,11 +3,7 @@ description: Fetches JSON from API and prepares train/test/anomaly datasets with
 inputs:
   - {name: api_url, type: String, description: 'API URL to fetch JSON dataset'}
   - {name: access_token, type: string, description: 'Bearer access token for API auth'}
-  - name: selected_column
-    type: String
-    description: 'Choose which column to analyze'
-    widget: dropdown
-    options: ["endpoint_count", "reachable_frac", "deg_cent", "betw_cent", "clustering", "pagerank"]
+  - {name: numeric_cols, type: String, description: 'JSON-style string list of numeric columns'}
 outputs:
   - {name: train_data, type: Dataset}
   - {name: test_data, type: Dataset}
@@ -29,6 +25,7 @@ implementation:
         import argparse
         import os
         import pickle
+        import json
         import pandas as pd
         import numpy as np
         import requests
@@ -37,16 +34,16 @@ implementation:
         parser = argparse.ArgumentParser()
         parser.add_argument('--api_url', type=str, required=True, help='API URL to fetch JSON dataset')
         parser.add_argument('--access_token', type=str, required=True, help='Bearer token for API')
+        parser.add_argument('--numeric_cols', type=str, required=True, help='String list of numeric cols')
         parser.add_argument('--train_data', type=str, required=True, help='Path to output train dataset')
         parser.add_argument('--test_data', type=str, required=True, help='Path to output test dataset')
         parser.add_argument('--anomaly_data', type=str, required=True, help='Path to output anomaly labels')
-        parser.add_argument('--selected_column', type=str, required=True, help='Column chosen for analysis')
         args = parser.parse_args()
 
         with open(args.access_token, 'r') as f:
             access_token = f.read().strip()
         
-        # Fetch dataset from API
+        # Fetch dataset
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {access_token}"
@@ -64,58 +61,51 @@ implementation:
         resp = requests.post(args.api_url, headers=headers, json=payload)
         resp.raise_for_status()
         raw_data = resp.json()
-        
         df = pd.DataFrame(raw_data)
-        
-        # Drop unwanted columns
-        drop_cols = ["piMetadata", "execution_timestamp", "pipelineid", "component_id", "projectid"]
-        df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
-        
-        # Only keep selected column
-        selected_col = args.selected_column
-        if selected_col not in df.columns:
-            raise ValueError(f"Selected column {selected_col} not found in dataset")
-        
-        df[selected_col] = pd.to_numeric(df[selected_col], errors="coerce")
-        df = df[[selected_col]]
-        
-        # Handle anomalies: reachable_frac == 0.0 → anomaly=1 (only if reachable_frac exists)
-        if "reachable_frac" in df.columns:
-            anomaly_labels = (df["reachable_frac"] == 0.0).astype(np.int32)
-        else:
-            anomaly_labels = pd.Series([0] * len(df), dtype=np.int32)
-        
-        # Train-test split (no normalization)
+
+        # Parse numeric_cols string into a Python list
+        numeric_cols = json.loads(args.numeric_cols)
+
+        # Convert all columns to numeric where possible
+        df = df.apply(pd.to_numeric, errors="coerce")
+
+        # Keep only numeric columns
+        df = df.select_dtypes(include=[np.number])
+
+        # Restrict to user-specified numeric_cols if they exist
+        df = df[[col for col in numeric_cols if col in df.columns]]
+
+        # Handle anomalies
+        anomaly_labels = (df["reachable_frac"] == 0.0).astype(np.int32)
+
         train_df, test_df, train_labels, test_labels = train_test_split(
             df, anomaly_labels, test_size=0.2, random_state=42, stratify=anomaly_labels
         )
-        
-        # Save train data
+
         os.makedirs(os.path.dirname(args.train_data) or ".", exist_ok=True)
         with open(args.train_data, "wb") as f:
             pickle.dump(train_df, f)
-        
-        # Save test data
+
         os.makedirs(os.path.dirname(args.test_data) or ".", exist_ok=True)
         with open(args.test_data, "wb") as f:
             pickle.dump(test_df, f)
-        
-        # Save anomaly labels for test set
+
         os.makedirs(os.path.dirname(args.anomaly_data) or ".", exist_ok=True)
         with open(args.anomaly_data, "wb") as f:
             pickle.dump(test_labels, f)
-        
-        print(f" Successfully processed and saved dataset (from API).")
+
+        print("Successfully processed and saved dataset.")
+
     args:
       - --api_url
       - {inputValue: api_url}
       - --access_token
       - {inputPath: access_token}
+      - --numeric_cols
+      - '["endpoint_count", "reachable_frac", "deg_cent", "betw_cent", "clustering", "pagerank"]'
       - --train_data
       - {outputPath: train_data}
       - --test_data
       - {outputPath: test_data}
       - --anomaly_data
       - {outputPath: anomaly_data}
-      - --selected_column
-      - {inputValue: selected_column}
