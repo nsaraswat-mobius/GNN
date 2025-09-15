@@ -1,0 +1,99 @@
+name: Load JSON dataset with anomaly detection
+description: Fetches JSON from API and prepares train/test/anomaly datasets with float-only features.
+inputs:
+  - {name: api_url, type: String, description: 'API URL to fetch JSON dataset'}
+  - {name: access_token, type: string, description: 'Bearer access token for API auth'}
+  - {name: selected_param, type: string, default: "reachable_frac", description: 'Parameter to use (dropdown)'}
+outputs:
+  - {name: train_data, type: Dataset}
+  - {name: test_data, type: Dataset}
+  - {name: anomaly_data, type: Dataset}
+implementation:
+  container:
+    image: python:3.9
+    command:
+      - sh
+      - -c
+      - |
+        python3 -m pip install --quiet requests pandas scikit-learn || \
+        python3 -m pip install --quiet requests pandas scikit-learn --user
+        exec "$0" "$@"
+      - python3
+      - -u
+      - -c
+      - |
+        import argparse
+        import os
+        import pickle
+        import pandas as pd
+        import numpy as np
+        import requests
+        from sklearn.model_selection import train_test_split
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--api_url', type=str, required=True, help='API URL to fetch JSON dataset')
+        parser.add_argument('--access_token', type=str, required=True, help='Bearer token for API')
+        parser.add_argument('--selected_param', type=str, required=True, help='Parameter to keep for analysis')
+        parser.add_argument('--train_data', type=str, required=True, help='Path to output train dataset')
+        parser.add_argument('--test_data', type=str, required=True, help='Path to output test dataset')
+        parser.add_argument('--anomaly_data', type=str, required=True, help='Path to output anomaly labels')
+        args = parser.parse_args()
+
+        with open(args.access_token, 'r') as f:
+            access_token = f.read().strip()
+        
+        # Fetch dataset
+        headers = {"Content-Type": "application/json","Authorization": f"Bearer {access_token}"}
+        payload = {"dbType":"TIDB","entityId":"","entityIds":[],"ownedOnly":False,"projections":[],"filter":{},"startTime":0,"endTime":0}
+        resp = requests.post(args.api_url, headers=headers, json=payload)
+        resp.raise_for_status()
+        raw_data = resp.json()
+        
+        df = pd.DataFrame(raw_data)
+        
+        # Drop unwanted columns
+        drop_cols = ["piMetadata", "execution_timestamp", "pipelineid", "component_id", "projectid"]
+        df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
+        
+        # Convert numeric
+        if args.selected_param in df.columns:
+            df[args.selected_param] = pd.to_numeric(df[args.selected_param], errors="coerce")
+        else:
+            raise ValueError(f"Selected parameter {args.selected_param} not in dataset")
+        
+        # Keep only the chosen param
+        df = df[[args.selected_param]]
+        
+        # Anomaly labels (if using reachable_frac)
+        if args.selected_param == "reachable_frac":
+            anomaly_labels = (df["reachable_frac"] == 0.0).astype(np.int32)
+        else:
+            anomaly_labels = np.zeros(len(df), dtype=np.int32)
+        
+        # Train-test split
+        train_df, test_df, train_labels, test_labels = train_test_split(
+            df, anomaly_labels, test_size=0.2, random_state=42, stratify=anomaly_labels if anomaly_labels.sum() > 0 else None
+        )
+        
+        # Save outputs
+        os.makedirs(os.path.dirname(args.train_data) or ".", exist_ok=True)
+        with open(args.train_data, "wb") as f: pickle.dump(train_df, f)
+        os.makedirs(os.path.dirname(args.test_data) or ".", exist_ok=True)
+        with open(args.test_data, "wb") as f: pickle.dump(test_df, f)
+        os.makedirs(os.path.dirname(args.anomaly_data) or ".", exist_ok=True)
+        with open(args.anomaly_data, "wb") as f: pickle.dump(test_labels, f)
+        
+        print(f" Successfully processed dataset for param={args.selected_param}")
+    args:
+      - --api_url
+      - {inputValue: api_url}
+      - --access_token
+      - {inputPath: access_token}
+      - --selected_param
+      - {inputValue: selected_param}
+      - --train_data
+      - {outputPath: train_data}
+      - --test_data
+      - {outputPath: test_data}
+      - --anomaly_data
+      - {outputPath: anomaly_data}
