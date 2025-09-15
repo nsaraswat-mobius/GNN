@@ -1,6 +1,5 @@
 name: Load JSON dataset for continual learning with temporal splitting
 description: Fetches JSON from API and prepares sequential tasks for continual learning with STGNN, supporting temporal, anomaly, and drift splitting strategies.
-
 inputs:
   - {name: api_url, type: String, description: 'API URL to fetch JSON dataset'}
   - {name: access_token, type: string, description: 'Bearer access token for API auth'}
@@ -8,12 +7,10 @@ inputs:
   - {name: splitting_strategy, type: string, description: 'Strategy for splitting data: temporal_split, anomaly_split, drift_split', default: 'temporal_split'}
   - {name: test_size, type: float, description: 'Fraction of data to use for testing', default: 0.2}
   - {name: val_size, type: float, description: 'Fraction of remaining data to use for validation', default: 0.2}
-
 outputs:
   - {name: task_datasets, type: Dataset, description: 'List of task datasets for continual learning'}
   - {name: task_metadata, type: Dataset, description: 'Metadata for each continual learning task'}
   - {name: scaler_data, type: Dataset, description: 'Data scaler for consistent normalization across tasks'}
-
 implementation:
   container:
     image: python:3.9
@@ -28,7 +25,327 @@ implementation:
       - -u
       - -c
       - |
-        # (your full Python code stays here as you already wrote)
+        import argparse
+        import os
+        import pickle
+        import pandas as pd
+        import numpy as np
+        import requests
+        from sklearn.model_selection import train_test_split
+        from sklearn.preprocessing import StandardScaler
+        import json
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--api_url', type=str, required=True, help='API URL to fetch JSON dataset')
+        parser.add_argument('--access_token', type=str, required=True, help='Bearer token for API')
+        parser.add_argument('--num_tasks', type=int, default=3, help='Number of continual learning tasks')
+        parser.add_argument('--splitting_strategy', type=str, default='temporal_split', 
+                          help='Strategy: temporal_split, anomaly_split, drift_split')
+        parser.add_argument('--test_size', type=float, default=0.2, help='Test set fraction')
+        parser.add_argument('--val_size', type=float, default=0.2, help='Validation set fraction')
+        parser.add_argument('--task_datasets', type=str, required=True, help='Path to output task datasets')
+        parser.add_argument('--task_metadata', type=str, required=True, help='Path to output task metadata')
+        parser.add_argument('--scaler_data', type=str, required=True, help='Path to output scaler data')
+        args = parser.parse_args()
+
+        print(f"🚀 Starting continual dataset loading with {args.splitting_strategy} strategy")
+        print(f"Creating {args.num_tasks} tasks from API data...")
+
+        # Read access token
+        with open(args.access_token, 'r') as f:
+            access_token = f.read().strip()
+        
+        # Fetch dataset from API
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {access_token}"
+        }
+        payload = {
+            "dbType": "TIDB",
+            "entityId": "",
+            "entityIds": [],
+            "ownedOnly": False,
+            "projections": [],
+            "filter": {},
+            "startTime": 0,
+            "endTime": 0
+        }
+        
+        print("📡 Fetching data from API...")
+        resp = requests.post(args.api_url, headers=headers, json=payload)
+        resp.raise_for_status()
+        raw_data = resp.json()
+        
+        df = pd.DataFrame(raw_data)
+        print(f"📊 Loaded {len(df)} samples from API")
+        
+        # Drop unwanted columns
+        drop_cols = ["piMetadata", "execution_timestamp", "pipelineid", "component_id", "projectid"]
+        df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
+        
+        # Convert numeric columns properly
+        numeric_cols = ["endpoint_count", "reachable_frac", "deg_cent", "betw_cent", "clustering", "pagerank"]
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        
+        # Keep only numeric float features
+        available_cols = [col for col in numeric_cols if col in df.columns]
+        df = df[available_cols]
+        
+        print(f"🔧 Using features: {available_cols}")
+        
+        # Handle missing values
+        df = df.fillna(df.mean())
+        
+        # Prepare features and labels for time-series forecasting
+        # For STGNN, we need to create sliding windows
+        sequence_length = 12  # Look-back window
+        prediction_length = 1  # Forecast horizon
+        
+        def create_sequences(data, seq_len, pred_len):
+            """Create sliding window sequences for time-series forecasting"""
+            X, y = [], []
+            for i in range(len(data) - seq_len - pred_len + 1):
+                X.append(data[i:(i + seq_len)])
+                y.append(data[(i + seq_len):(i + seq_len + pred_len)])
+            return np.array(X), np.array(y)
+        
+        # Create sequences for time-series forecasting
+        X_sequences, y_sequences = create_sequences(df.values, sequence_length, prediction_length)
+        
+        print(f"📈 Created {len(X_sequences)} sequences with shape {X_sequences.shape}")
+        
+        # Global train-test split first
+        X_temp, X_test, y_temp, y_test = train_test_split(
+            X_sequences, y_sequences, test_size=args.test_size, random_state=42, shuffle=False
+        )
+        
+        # Train-validation split
+        X_train, X_val, y_train, y_val = train_test_split(
+            X_temp, y_temp, test_size=args.val_size/(1-args.test_size), random_state=42, shuffle=False
+        )
+        
+        # Fit scaler on training data
+        scaler = StandardScaler()
+        # Reshape for fitting: (samples * sequence_length, features)
+        X_train_reshaped = X_train.reshape(-1, X_train.shape[-1])
+        scaler.fit(X_train_reshaped)
+        
+        print(f"🎯 Data splits - Train: {X_train.shape}, Val: {X_val.shape}, Test: {X_test.shape}")
+        
+        # Apply different splitting strategies for continual learning
+        def temporal_split(X_train, y_train, X_val, y_val, X_test, y_test, num_tasks):
+            """Split data chronologically into different time periods."""
+            tasks = []
+            
+            # Calculate splits for each dataset
+            train_splits = np.array_split(range(len(X_train)), num_tasks)
+            val_splits = np.array_split(range(len(X_val)), num_tasks)
+            test_splits = np.array_split(range(len(X_test)), num_tasks)
+            
+            for i in range(num_tasks):
+                task_data = {
+                    'task_id': i,
+                    'x_train': X_train[train_splits[i]],
+                    'y_train': y_train[train_splits[i]],
+                    'x_val': X_val[val_splits[i]],
+                    'y_val': y_val[val_splits[i]],
+                    'x_test': X_test[test_splits[i]],
+                    'y_test': y_test[test_splits[i]],
+                    'description': f'Temporal Period {i+1}/{num_tasks}',
+                    'strategy': 'temporal_split'
+                }
+                tasks.append(task_data)
+                
+            return tasks
+        
+        def anomaly_split(X_train, y_train, X_val, y_val, X_test, y_test, num_tasks):
+            """Split data based on anomaly patterns - simulating different anomaly types."""
+            if num_tasks != 3:
+                print("⚠️ Anomaly split currently supports exactly 3 tasks. Adjusting to 3.")
+                num_tasks = 3
+            
+            tasks = []
+            base_train_size = len(X_train) // num_tasks
+            base_val_size = len(X_val) // num_tasks
+            base_test_size = len(X_test) // num_tasks
+            
+            for i in range(num_tasks):
+                # Select base data for this task
+                train_start = i * base_train_size
+                train_end = (i + 1) * base_train_size if i < num_tasks - 1 else len(X_train)
+                
+                val_start = i * base_val_size
+                val_end = (i + 1) * base_val_size if i < num_tasks - 1 else len(X_val)
+                
+                test_start = i * base_test_size
+                test_end = (i + 1) * base_test_size if i < num_tasks - 1 else len(X_test)
+                
+                x_train_task = X_train[train_start:train_end].copy()
+                y_train_task = y_train[train_start:train_end].copy()
+                x_val_task = X_val[val_start:val_end].copy()
+                y_val_task = y_val[val_start:val_end].copy()
+                x_test_task = X_test[test_start:test_end].copy()
+                y_test_task = y_test[test_start:test_end].copy()
+                
+                # Inject different types of anomalies
+                if i == 1:  # Mild anomalies
+                    anomaly_factor = 1.2
+                    noise_level = 0.1
+                    description = 'Mild Anomaly Pattern'
+                elif i == 2:  # Severe anomalies
+                    anomaly_factor = 1.5
+                    noise_level = 0.2
+                    description = 'Severe Anomaly Pattern'
+                else:  # Normal data
+                    anomaly_factor = 1.0
+                    noise_level = 0.0
+                    description = 'Normal Data Pattern'
+                
+                # Apply anomaly injection
+                if anomaly_factor > 1.0:
+                    # Random anomaly injection on training data
+                    anomaly_indices = np.random.choice(
+                        len(x_train_task), size=int(0.1 * len(x_train_task)), replace=False
+                    )
+                    x_train_task[anomaly_indices] *= anomaly_factor
+                    if noise_level > 0:
+                        noise = np.random.normal(0, noise_level, x_train_task[anomaly_indices].shape)
+                        x_train_task[anomaly_indices] += noise
+                
+                task_data = {
+                    'task_id': i,
+                    'x_train': x_train_task,
+                    'y_train': y_train_task,
+                    'x_val': x_val_task,
+                    'y_val': y_val_task,
+                    'x_test': x_test_task,
+                    'y_test': y_test_task,
+                    'description': description,
+                    'strategy': 'anomaly_split',
+                    'anomaly_factor': anomaly_factor,
+                    'noise_level': noise_level
+                }
+                tasks.append(task_data)
+                
+            return tasks
+        
+        def drift_split(X_train, y_train, X_val, y_val, X_test, y_test, num_tasks):
+            """Split data simulating concept drift - gradually changing data distribution."""
+            tasks = []
+            overlap_ratio = 0.2  # 20% overlap between consecutive tasks
+            
+            for i in range(num_tasks):
+                # Progressive shift in data selection
+                drift_factor = i / (num_tasks - 1) if num_tasks > 1 else 0
+                
+                # Calculate start and end indices with drift and overlap
+                train_window_size = len(X_train) // num_tasks
+                train_start = int(i * train_window_size * (1 - overlap_ratio))
+                train_end = min(train_start + train_window_size, len(X_train))
+                
+                val_window_size = len(X_val) // num_tasks
+                val_start = int(i * val_window_size * (1 - overlap_ratio))
+                val_end = min(val_start + val_window_size, len(X_val))
+                
+                test_window_size = len(X_test) // num_tasks
+                test_start = int(i * test_window_size * (1 - overlap_ratio))
+                test_end = min(test_start + test_window_size, len(X_test))
+                
+                # Apply gradual drift to features
+                x_train_task = X_train[train_start:train_end].copy()
+                y_train_task = y_train[train_start:train_end].copy()
+                x_val_task = X_val[val_start:val_end].copy()
+                y_val_task = y_val[val_start:val_end].copy()
+                x_test_task = X_test[test_start:test_end].copy()
+                y_test_task = y_test[test_start:test_end].copy()
+                
+                # Apply concept drift (gradual shift in data distribution)
+                drift_intensity = 0.1 * drift_factor  # Gradually increasing drift
+                if drift_intensity > 0:
+                    # Add systematic bias that increases over tasks
+                    bias = np.sin(2 * np.pi * drift_factor) * drift_intensity
+                    x_train_task += bias
+                    x_val_task += bias
+                    x_test_task += bias
+                
+                task_data = {
+                    'task_id': i,
+                    'x_train': x_train_task,
+                    'y_train': y_train_task,
+                    'x_val': x_val_task,
+                    'y_val': y_val_task,
+                    'x_test': x_test_task,
+                    'y_test': y_test_task,
+                    'description': f'Drift Period {i+1} (Intensity: {drift_intensity:.2f})',
+                    'strategy': 'drift_split',
+                    'drift_factor': drift_factor,
+                    'drift_intensity': drift_intensity
+                }
+                tasks.append(task_data)
+                
+            return tasks
+        
+        # Apply the selected splitting strategy
+        print(f"🔄 Applying {args.splitting_strategy} strategy...")
+        
+        if args.splitting_strategy == 'temporal_split':
+            tasks = temporal_split(X_train, y_train, X_val, y_val, X_test, y_test, args.num_tasks)
+        elif args.splitting_strategy == 'anomaly_split':
+            tasks = anomaly_split(X_train, y_train, X_val, y_val, X_test, y_test, args.num_tasks)
+        elif args.splitting_strategy == 'drift_split':
+            tasks = drift_split(X_train, y_train, X_val, y_val, X_test, y_test, args.num_tasks)
+        else:
+            raise ValueError(f"Unknown splitting strategy: {args.splitting_strategy}")
+        
+        # Create task metadata
+        task_metadata = {
+            'num_tasks': len(tasks),
+            'splitting_strategy': args.splitting_strategy,
+            'sequence_length': sequence_length,
+            'prediction_length': prediction_length,
+            'feature_columns': available_cols,
+            'total_samples': len(df),
+            'total_sequences': len(X_sequences),
+            'train_samples': len(X_train),
+            'val_samples': len(X_val),
+            'test_samples': len(X_test),
+            'task_descriptions': [task['description'] for task in tasks]
+        }
+        
+        print(f"✅ Created {len(tasks)} continual learning tasks:")
+        for i, task in enumerate(tasks):
+            print(f"  Task {i+1}: {task['description']} - Train: {len(task['x_train'])}, Val: {len(task['x_val'])}, Test: {len(task['x_test'])}")
+        
+        # Save task datasets
+        os.makedirs(os.path.dirname(args.task_datasets) or ".", exist_ok=True)
+        with open(args.task_datasets, "wb") as f:
+            pickle.dump(tasks, f)
+        
+        # Save task metadata
+        os.makedirs(os.path.dirname(args.task_metadata) or ".", exist_ok=True)
+        with open(args.task_metadata, "wb") as f:
+            pickle.dump(task_metadata, f)
+        
+        # Save scaler data
+        os.makedirs(os.path.dirname(args.scaler_data) or ".", exist_ok=True)
+        scaler_info = {
+            'scaler': scaler,
+            'feature_columns': available_cols,
+            'sequence_length': sequence_length,
+            'prediction_length': prediction_length
+        }
+        with open(args.scaler_data, "wb") as f:
+            pickle.dump(scaler_info, f)
+        
+        print(f"💾 Successfully processed and saved continual learning dataset")
+        print(f"   Strategy: {args.splitting_strategy}")
+        print(f"   Tasks: {len(tasks)}")
+        print(f"   Features: {len(available_cols)}")
+        print(f"   Sequence length: {sequence_length}")
+        print(f"   Total sequences: {len(X_sequences)}")
+
     args:
       - --api_url
       - {inputValue: api_url}
