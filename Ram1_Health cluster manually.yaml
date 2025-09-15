@@ -1,0 +1,127 @@
+name: Load JSON dataset with anomaly detection
+description: Fetches JSON from API and prepares train/test/anomaly datasets with float-only features.
+inputs:
+  - {name: api_url, type: String, description: 'API URL to fetch JSON dataset'}
+  - {name: access_token, type: string, description: 'Bearer access token for API auth'}
+  - {name: numeric_cols, type: String, description: 'JSON-style string list of numeric columns'}
+outputs:
+  - {name: train_data, type: Dataset}
+  - {name: test_data, type: Dataset}
+  - {name: anomaly_data, type: Dataset}
+  - {name: used_numeric_cols, type: Data}
+implementation:
+  container:
+    image: python:3.9
+    command:
+      - sh
+      - -c
+      - |
+        python3 -m pip install --quiet requests pandas scikit-learn || \
+        python3 -m pip install --quiet requests pandas scikit-learn --user
+        exec "$0" "$@"
+      - python3
+      - -u
+      - -c
+      - |
+        import argparse
+        import os
+        import pickle
+        import json
+        import pandas as pd
+        import numpy as np
+        import requests
+        from sklearn.model_selection import train_test_split
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--api_url', type=str, required=True, help='API URL to fetch JSON dataset')
+        parser.add_argument('--access_token', type=str, required=True, help='Bearer token for API')
+        parser.add_argument('--numeric_cols', type=str, required=True, help='String list of numeric cols')
+        parser.add_argument('--train_data', type=str, required=True, help='Path to output train dataset')
+        parser.add_argument('--test_data', type=str, required=True, help='Path to output test dataset')
+        parser.add_argument('--anomaly_data', type=str, required=True, help='Path to output anomaly labels')
+        parser.add_argument('--used_numeric_cols', type=str, required=True, help='Path to output list of used numeric columns')
+        args = parser.parse_args()
+
+        # Read access token
+        with open(args.access_token, 'r') as f:
+            access_token = f.read().strip()
+
+        # Fetch dataset
+        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {access_token}"}
+        payload = {
+            "dbType": "TIDB",
+            "entityId": "",
+            "entityIds": [],
+            "ownedOnly": False,
+            "projections": [],
+            "filter": {},
+            "startTime": 0,
+            "endTime": 0
+        }
+        resp = requests.post(args.api_url, headers=headers, json=payload)
+        resp.raise_for_status()
+        raw_data = resp.json()
+
+        # Convert to DataFrame
+        df = pd.DataFrame(raw_data)
+
+        # Parse numeric_cols string into a Python list
+        numeric_cols = json.loads(args.numeric_cols)
+
+        # Convert everything possible to numeric
+        df = df.apply(pd.to_numeric, errors="coerce")
+
+        # Keep only numeric columns
+        df = df.select_dtypes(include=[np.number])
+
+        # Restrict to user-specified numeric_cols (if they exist)
+        numeric_cols_used = [col for col in numeric_cols if col in df.columns]
+        df = df[numeric_cols_used]
+
+        # Fill NaNs with 0
+        df = df.fillna(0.0)
+
+        # Define anomaly rule: cond_Ready == 0 → anomaly
+        anomaly_labels = (df.get("cond_Ready", pd.Series([0]*len(df))) == 0).astype(np.int32)
+
+        # Train-test split
+        train_df, test_df, train_labels, test_labels = train_test_split(
+            df, anomaly_labels, test_size=0.2, random_state=42, stratify=anomaly_labels
+        )
+
+        # Save train
+        os.makedirs(os.path.dirname(args.train_data) or ".", exist_ok=True)
+        with open(args.train_data, "wb") as f:
+            pickle.dump(train_df, f)
+
+        # Save test
+        os.makedirs(os.path.dirname(args.test_data) or ".", exist_ok=True)
+        with open(args.test_data, "wb") as f:
+            pickle.dump(test_df, f)
+
+        # Save anomaly labels
+        os.makedirs(os.path.dirname(args.anomaly_data) or ".", exist_ok=True)
+        with open(args.anomaly_data, "wb") as f:
+            pickle.dump(test_labels, f)
+
+        # Save list of numeric columns actually used
+        os.makedirs(os.path.dirname(args.used_numeric_cols) or ".", exist_ok=True)
+        with open(args.used_numeric_cols, "wb") as f:
+            pickle.dump(numeric_cols_used, f)
+
+        print("✅ Successfully processed dataset and saved used numeric columns.")
+    args:
+      - --api_url
+      - {inputValue: api_url}
+      - --access_token
+      - {inputPath: access_token}
+      - --numeric_cols
+      - '["endpoint_count", "reachable_frac", "deg_cent", "betw_cent", "clustering", "pagerank"]'
+      - --train_data
+      - {outputPath: train_data}
+      - --test_data
+      - {outputPath: test_data}
+      - --anomaly_data
+      - {outputPath: anomaly_data}
+      - --used_numeric_cols
+      - {outputPath: used_numeric_cols}
