@@ -42,10 +42,13 @@ implementation:
         parser.add_argument('--num_numeric_cols', type=str, required=True)
         args = parser.parse_args()
 
+        print("Starting dataset loading pipeline...")
+
         # Read token
         with open(args.access_token, 'r') as f:
             access_token = f.read().strip()
-        
+        print("Access token loaded.")
+
         # Fetch dataset
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {access_token}"}
         payload = {
@@ -53,61 +56,81 @@ implementation:
             "ownedOnly": False, "projections": [], "filter": {},
             "startTime": 0, "endTime": 0
         }
+        print(f"Sending POST request to {args.api_url} ...")
         resp = requests.post(args.api_url, headers=headers, json=payload)
         resp.raise_for_status()
         raw_data = resp.json()
+        print(f"Data fetched successfully. Records: {len(raw_data)}")
+
         df = pd.DataFrame(raw_data)
+        print(f"Raw DataFrame shape: {df.shape}")
 
         # Parse numeric_cols string into Python list
         numeric_cols = json.loads(args.numeric_cols)
+        print(f"Requested numeric columns: {numeric_cols}")
 
         # Convert everything numeric where possible
         df = df.apply(pd.to_numeric, errors="coerce")
+        print("Converted all values to numeric (non-numeric -> NaN).")
 
         # Keep only numeric columns
         df = df.select_dtypes(include=[np.number])
+        print(f"DataFrame after numeric filter shape: {df.shape}")
 
         # Keep only requested columns that actually exist
         present_cols = [col for col in numeric_cols if col in df.columns]
         df = df[present_cols]
+        print(f"Kept {len(present_cols)} requested numeric columns: {present_cols}")
+        print(f"Final filtered DataFrame shape: {df.shape}")
 
         # Handle anomalies safely
         if "reachable_frac" in df.columns:
             anomaly_labels = (df["reachable_frac"] == 0.0).astype(np.int32)
+            print("Anomaly labels created from 'reachable_frac'.")
         else:
             print("Warning: 'reachable_frac' column not found. Using all zeros for anomaly labels.")
             anomaly_labels = pd.Series(np.zeros(len(df), dtype=np.int32), index=df.index)
 
+        print(f"Anomaly labels distribution:\n{anomaly_labels.value_counts()}")
+
         # Train/test split
-        if anomaly_labels.nunique() > 1:  # stratify only if more than 1 class
+        if anomaly_labels.nunique() > 1:
+            print("Performing stratified train/test split...")
             train_df, test_df, train_labels, test_labels = train_test_split(
                 df, anomaly_labels, test_size=0.2, random_state=42, stratify=anomaly_labels
             )
         else:
+            print("Performing normal train/test split (only one class found).")
             train_df, test_df, train_labels, test_labels = train_test_split(
                 df, anomaly_labels, test_size=0.2, random_state=42
             )
+
+        print(f"Train shape: {train_df.shape}, Test shape: {test_df.shape}")
 
         # Save outputs
         os.makedirs(os.path.dirname(args.train_data) or ".", exist_ok=True)
         with open(args.train_data, "wb") as f:
             pickle.dump(train_df, f)
+        print("Train dataset saved.")
 
         os.makedirs(os.path.dirname(args.test_data) or ".", exist_ok=True)
         with open(args.test_data, "wb") as f:
             pickle.dump(test_df, f)
+        print("Test dataset saved.")
 
         os.makedirs(os.path.dirname(args.anomaly_data) or ".", exist_ok=True)
         with open(args.anomaly_data, "wb") as f:
             pickle.dump(test_labels, f)
+        print("Anomaly labels saved.")
 
         # Save number of numeric columns actually used
         num_cols = len(present_cols)
         os.makedirs(os.path.dirname(args.num_numeric_cols) or ".", exist_ok=True)
         with open(args.num_numeric_cols, "w") as f:
             f.write(str(num_cols))
+        print(f"Number of numeric columns saved: {num_cols}")
 
-        print(f"Successfully processed and saved dataset. Using {num_cols} numeric columns.")
+        print("Successfully processed and saved dataset.")
 
     args:
       - --api_url
