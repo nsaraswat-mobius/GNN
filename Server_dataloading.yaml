@@ -8,6 +8,7 @@ outputs:
   - {name: train_data, type: Dataset}
   - {name: test_data, type: Dataset}
   - {name: anomaly_data, type: Dataset}
+  - {name: num_numeric_cols, type: Integer}
 implementation:
   container:
     image: python:3.9
@@ -38,6 +39,7 @@ implementation:
         parser.add_argument('--train_data', type=str, required=True, help='Path to output train dataset')
         parser.add_argument('--test_data', type=str, required=True, help='Path to output test dataset')
         parser.add_argument('--anomaly_data', type=str, required=True, help='Path to output anomaly labels')
+        parser.add_argument('--num_numeric_cols', type=str, required=True, help='Path to output number of numeric cols')
         args = parser.parse_args()
 
         with open(args.access_token, 'r') as f:
@@ -94,7 +96,13 @@ implementation:
         with open(args.anomaly_data, "wb") as f:
             pickle.dump(test_labels, f)
 
-        print("Successfully processed and saved dataset.")
+        # Save number of numeric columns used
+        num_cols = len(numeric_cols)
+        os.makedirs(os.path.dirname(args.num_numeric_cols) or ".", exist_ok=True)
+        with open(args.num_numeric_cols, "w") as f:
+            f.write(str(num_cols))
+
+        print(f"Successfully processed and saved dataset. Using {num_cols} numeric columns.")
 
     args:
       - --api_url
@@ -109,3 +117,5 @@ implementation:
       - {outputPath: test_data}
       - --anomaly_data
       - {outputPath: anomaly_data}
+      - --num_numeric_cols
+      - {outputPath: num_numeric_cols}
