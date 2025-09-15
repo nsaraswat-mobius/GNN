@@ -91,7 +91,8 @@ implementation:
             print("Warning: 'reachable_frac' column not found. Using all zeros for anomaly labels.")
             anomaly_labels = pd.Series(np.zeros(len(df), dtype=np.int32), index=df.index)
 
-        print(f"Anomaly labels distribution:\n{anomaly_labels.value_counts()}")
+        # Fixed: replaced f-string with format() to avoid YAML parse errors
+        print("Anomaly labels distribution:\n{}".format(anomaly_labels.value_counts()))
 
         # Train/test split
         if anomaly_labels.nunique() > 1:
@@ -131,19 +132,3 @@ implementation:
         print(f"Number of numeric columns saved: {num_cols}")
 
         print("Successfully processed and saved dataset.")
-
-    args:
-      - --api_url
-      - {inputValue: api_url}
-      - --access_token
-      - {inputPath: access_token}
-      - --numeric_cols
-      - '["endpoint_count", "reachable_frac", "deg_cent", "betw_cent", "clustering", "pagerank"]'
-      - --train_data
-      - {outputPath: train_data}
-      - --test_data
-      - {outputPath: test_data}
-      - --anomaly_data
-      - {outputPath: anomaly_data}
-      - --num_numeric_cols
-      - {outputPath: num_numeric_cols}
