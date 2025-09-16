@@ -78,21 +78,226 @@ implementation:
                 return _wrapper()
         # import your splitter from the script
         class TemporalDataSplitter:
-            
-            def __init__(self, data, config, strategy='temporal_split'):
-                self.data = data
-                self.config = config
-                self.strategy = strategy
-                
-            def create_continual_tasks(self, num_tasks: int = 3):
-                if self.strategy == 'temporal_split':
-                    return self._temporal_split(num_tasks)
-                elif self.strategy == 'anomaly_split':
-                    return self._anomaly_split(num_tasks)
-                elif self.strategy == 'drift_split':
-                    return self._drift_split(num_tasks)
-                else:
-                    raise ValueError(f"Unknown strategy: {self.strategy}")
+          
+          def __init__(self, data, config, strategy='temporal_split'):
+              self.data = data
+              self.config = config
+              self.strategy = strategy
+              
+          def create_continual_tasks(self, num_tasks: int = 3) -> List[Dict]:
+              if self.strategy == 'temporal_split':
+                  return self._temporal_split(num_tasks)
+              elif self.strategy == 'anomaly_split':
+                  return self._anomaly_split(num_tasks)
+              elif self.strategy == 'drift_split':
+                  return self._drift_split(num_tasks)
+              else:
+                  raise ValueError(f"Unknown strategy: {self.strategy}")
+          
+          def _temporal_split(self, num_tasks: int) -> List[Dict]:
+              tasks = []
+              
+              # Calculate splits for train, val, test data
+              train_size = len(self.data.x_train)
+              val_size = len(self.data.x_val)
+              test_size = len(self.data.x_test)
+              
+              # Split each dataset into tasks
+              train_splits = np.array_split(range(train_size), num_tasks)
+              val_splits = np.array_split(range(val_size), num_tasks)
+              test_splits = np.array_split(range(test_size), num_tasks)
+              
+              for i in range(num_tasks):
+                  task_data = {
+                      'task_id': i,
+                      'x_train': self.data.x_train[train_splits[i]],
+                      'y_train': self.data.y_train[train_splits[i]],
+                      'x_val': self.data.x_val[val_splits[i]],
+                      'y_val': self.data.y_val[val_splits[i]],
+                      'x_test': self.data.x_test[test_splits[i]],
+                      'y_test': self.data.y_test[test_splits[i]],
+                      'scaler': self.data.scaler,
+                      'description': f'Temporal Period {i+1}/{num_tasks}'
+                  }
+                  
+                  # Create data loaders for each task
+                  task_data['train_loader'] = DataLoaderM(
+                      task_data['x_train'], task_data['y_train'], self.config['batch_size']
+                  )
+                  task_data['val_loader'] = DataLoaderM(
+                      task_data['x_val'], task_data['y_val'], self.config['batch_size']
+                  )
+                  task_data['test_loader'] = DataLoaderM(
+                      task_data['x_test'], task_data['y_test'], self.config['batch_size']
+                  )
+                  
+                  # Add masks for compatibility
+                  task_data['train_mask'] = torch.ones(len(task_data['x_train']), dtype=torch.bool)
+                  task_data['test_mask'] = torch.ones(len(task_data['x_test']), dtype=torch.bool)
+                  
+                  tasks.append(task_data)
+              
+              return tasks
+          
+          def _anomaly_split(self, num_tasks: int) -> List[Dict]:
+              tasks = []
+              
+              # For demonstration, we'll create synthetic anomaly injection
+              # Task 1: Normal data, Task 2: Mild anomalies, Task 3: Severe anomalies
+              if num_tasks != 3:
+                  print("Anomaly split currently supports exactly 3 tasks. Adjusting to 3.")
+                  num_tasks = 3
+              
+              base_train_size = len(self.data.x_train) // num_tasks
+              base_val_size = len(self.data.x_val) // num_tasks
+              base_test_size = len(self.data.x_test) // num_tasks
+              
+              for i in range(num_tasks):
+                  # Select base data for this task
+                  train_start = i * base_train_size
+                  train_end = (i + 1) * base_train_size if i < num_tasks - 1 else len(self.data.x_train)
+                  
+                  val_start = i * base_val_size
+                  val_end = (i + 1) * base_val_size if i < num_tasks - 1 else len(self.data.x_val)
+                  
+                  test_start = i * base_test_size
+                  test_end = (i + 1) * base_test_size if i < num_tasks - 1 else len(self.data.x_test)
+                  
+                  x_train = self.data.x_train[train_start:train_end].copy()
+                  y_train = self.data.y_train[train_start:train_end].copy()
+                  x_val = self.data.x_val[val_start:val_end].copy()
+                  y_val = self.data.y_val[val_start:val_end].copy()
+                  x_test = self.data.x_test[test_start:test_end].copy()
+                  y_test = self.data.y_test[test_start:test_end].copy()
+                  
+                  # Inject different types of anomalies
+                  if i == 1:  # Mild anomalies
+                      anomaly_factor = 1.2
+                      noise_level = 0.1
+                  elif i == 2:  # Severe anomalies
+                      anomaly_factor = 1.5
+                      noise_level = 0.2
+                  else:  # Normal data
+                      anomaly_factor = 1.0
+                      noise_level = 0.0
+                  
+                  # Apply anomaly injection
+                  if anomaly_factor > 1.0:
+                      # Random anomaly injection
+                      anomaly_indices = np.random.choice(
+                          len(x_train), size=int(0.1 * len(x_train)), replace=False
+                      )
+                      x_train[anomaly_indices] *= anomaly_factor
+                      if noise_level > 0:
+                          noise = np.random.normal(0, noise_level, x_train[anomaly_indices].shape)
+                          x_train[anomaly_indices] += noise
+                  
+                  task_data = {
+                      'task_id': i,
+                      'x_train': x_train,
+                      'y_train': y_train,
+                      'x_val': x_val,
+                      'y_val': y_val,
+                      'x_test': x_test,
+                      'y_test': y_test,
+                      'scaler': self.data.scaler,
+                      'description': f'Anomaly Pattern {i+1}: {"Normal" if i==0 else "Mild" if i==1 else "Severe"}'
+                  }
+                  
+                  # Create data loaders
+                  task_data['train_loader'] = DataLoaderM(
+                      task_data['x_train'], task_data['y_train'], self.config['batch_size']
+                  )
+                  task_data['val_loader'] = DataLoaderM(
+                      task_data['x_val'], task_data['y_val'], self.config['batch_size']
+                  )
+                  task_data['test_loader'] = DataLoaderM(
+                      task_data['x_test'], task_data['y_test'], self.config['batch_size']
+                  )
+                  
+                  # Add masks
+                  task_data['train_mask'] = torch.ones(len(task_data['x_train']), dtype=torch.bool)
+                  task_data['test_mask'] = torch.ones(len(task_data['x_test']), dtype=torch.bool)
+                  
+                  tasks.append(task_data)
+              
+              return tasks
+          
+          def _drift_split(self, num_tasks: int) -> List[Dict]:
+              tasks = []
+              
+              # Create overlapping windows with drift
+              total_train = len(self.data.x_train)
+              total_val = len(self.data.x_val)
+              total_test = len(self.data.x_test)
+              
+              # Calculate window size with overlap
+              overlap_ratio = 0.2  # 20% overlap between consecutive tasks
+              
+              for i in range(num_tasks):
+                  # Progressive shift in data selection
+                  drift_factor = i / (num_tasks - 1) if num_tasks > 1 else 0
+                  
+                  # Calculate start and end indices with drift
+                  train_window_size = total_train // num_tasks
+                  train_start = int(i * train_window_size * (1 - overlap_ratio))
+                  train_end = min(train_start + train_window_size, total_train)
+                  
+                  val_window_size = total_val // num_tasks
+                  val_start = int(i * val_window_size * (1 - overlap_ratio))
+                  val_end = min(val_start + val_window_size, total_val)
+                  
+                  test_window_size = total_test // num_tasks
+                  test_start = int(i * test_window_size * (1 - overlap_ratio))
+                  test_end = min(test_start + test_window_size, total_test)
+                  
+                  # Apply gradual drift to features
+                  x_train = self.data.x_train[train_start:train_end].copy()
+                  y_train = self.data.y_train[train_start:train_end].copy()
+                  x_val = self.data.x_val[val_start:val_end].copy()
+                  y_val = self.data.y_val[val_start:val_end].copy()
+                  x_test = self.data.x_test[test_start:test_end].copy()
+                  y_test = self.data.y_test[test_start:test_end].copy()
+                  
+                  # Apply concept drift (gradual shift in data distribution)
+                  drift_intensity = 0.1 * drift_factor  # Gradually increasing drift
+                  if drift_intensity > 0:
+                      # Add systematic bias that increases over tasks
+                      bias = np.sin(2 * np.pi * drift_factor) * drift_intensity
+                      x_train += bias
+                      x_val += bias
+                      x_test += bias
+                  
+                  task_data = {
+                      'task_id': i,
+                      'x_train': x_train,
+                      'y_train': y_train,
+                      'x_val': x_val,
+                      'y_val': y_val,
+                      'x_test': x_test,
+                      'y_test': y_test,
+                      'scaler': self.data.scaler,
+                      'description': f'Drift Period {i+1} (Intensity: {drift_intensity:.2f})'
+                  }
+                  
+                  # Create data loaders
+                  task_data['train_loader'] = DataLoaderM(
+                      task_data['x_train'], task_data['y_train'], self.config['batch_size']
+                  )
+                  task_data['val_loader'] = DataLoaderM(
+                      task_data['x_val'], task_data['y_val'], self.config['batch_size']
+                  )
+                  task_data['test_loader'] = DataLoaderM(
+                      task_data['x_test'], task_data['y_test'], self.config['batch_size']
+                  )
+                  
+                  # Add masks
+                  task_data['train_mask'] = torch.ones(len(task_data['x_train']), dtype=torch.bool)
+                  task_data['test_mask'] = torch.ones(len(task_data['x_test']), dtype=torch.bool)
+                  
+                  tasks.append(task_data)
+              
+              return tasks
 
             # (your _temporal_split, _anomaly_split, _drift_split go here unchanged,
             # indentation already fixed in the block you pasted)
