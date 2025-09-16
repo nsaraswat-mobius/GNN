@@ -321,7 +321,7 @@ implementation:
 
         # Split into continual tasks
         splitter = TemporalDataSplitter(data, config=args.config, strategy=args.splitting_strategy)
-        tasks = splitter.create_continual_tasks(num_tasks=args.num_tasks)
+        tasks = splitter.create_continual_tasks(num_tasks=int(args.num_tasks))
 
         # Save tasks list as pickle
         os.makedirs(os.path.dirname(args.tasks_pickle) or ".", exist_ok=True)
