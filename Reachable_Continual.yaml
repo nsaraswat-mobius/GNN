@@ -34,20 +34,8 @@ implementation:
 
         # import your splitter from the script
         class TemporalDataSplitter:
-            """
-            Splits time-series data into temporal continual learning tasks.
-            Each task represents a different time period or data distribution.
-            """
             
             def __init__(self, data, config, strategy='temporal_split'):
-                """
-                Initialize the temporal data splitter.
-                
-                Args:
-                    data: Original time-series data
-                    config: Model configuration
-                    strategy: Splitting strategy ('temporal_split', 'anomaly_split', 'drift_split')
-                """
                 self.data = data
                 self.config = config
                 self.strategy = strategy
