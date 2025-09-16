@@ -1,13 +1,13 @@
 name: Load JSON dataset for continual learning with STGNN compatibility
-description: Fetches JSON from API and prepares sequential tasks for continual learning with STGNN, fully compatible with ContinualSTGNNTrainer and TemporalDataSplitter.
+description: Fetches JSON from API and prepares sequential tasks for continual learning with STGNN.
 inputs:
   - {name: api_url, type: String, description: 'API URL to fetch JSON dataset'}
   - {name: access_token, type: string, description: 'Bearer access token for API auth'}
-  - {name: num_tasks, type: int, description: 'Number of continual learning tasks to create', default: 3}
-  - {name: splitting_strategy, type: string, description: 'Strategy for splitting data: temporal_split, anomaly_split, drift_split', default: 'temporal_split'}
-  - {name: test_size, type: float, description: 'Fraction of data to use for testing', default: 0.2}
-  - {name: val_size, type: float, description: 'Fraction of remaining data to use for validation', default: 0.2}
-  - {name: batch_size, type: int, description: 'Batch size for data loaders', default: 32}
+  - {name: num_tasks, type: int, description: 'Number of continual learning tasks to create'}
+  - {name: splitting_strategy, type: string, description: 'Strategy for splitting data: temporal_split, anomaly_split, drift_split'}
+  - {name: test_size, type: float, description: 'Fraction of data to use for testing'}
+  - {name: val_size, type: float, description: 'Fraction of remaining data to use for validation'}
+  - {name: batch_size, type: int, description: 'Batch size for data loaders'}
 outputs:
   - {name: task_datasets, type: Dataset, description: 'List of task datasets for continual learning'}
   - {name: task_metadata, type: Dataset, description: 'Metadata for each continual learning task'}
@@ -210,3 +210,33 @@ implementation:
             'batch_size': args.batch_size
         }
         with open(args.scaler_data, "wb") as f:
+            pickle.dump(scaler_info, f)
+        
+        print(f"Successfully processed and saved continual learning dataset")
+        print(f"   Strategy: {args.splitting_strategy}")
+        print(f"   Tasks: {len(tasks)}")
+        print(f"   Features: {len(available_cols)}")
+        print(f"   Batch size: {args.batch_size}")
+        print(f"   Has anomaly labels: {anomaly_labels is not None}")
+
+    args:
+      - --api_url
+      - {inputValue: api_url}
+      - --access_token
+      - {inputPath: access_token}
+      - --num_tasks
+      - {inputValue: num_tasks}
+      - --splitting_strategy
+      - {inputValue: splitting_strategy}
+      - --test_size
+      - {inputValue: test_size}
+      - --val_size
+      - {inputValue: val_size}
+      - --batch_size
+      - {inputValue: batch_size}
+      - --task_datasets
+      - {outputPath: task_datasets}
+      - --task_metadata
+      - {outputPath: task_metadata}
+      - --scaler_data
+      - {outputPath: scaler_data}
