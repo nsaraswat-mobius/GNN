@@ -73,7 +73,7 @@ implementation:
         with open(args.tasks_pickle, "wb") as f:
             pickle.dump(tasks, f)
 
-        print(f" Saved {len(tasks)} continual tasks → {args.tasks_pickle}")
+        print(f" Saved {len(tasks)} continual tasks {args.tasks_pickle}")
     args:
       - --data_pickle
       - {inputPath: data_pickle}
