@@ -4,8 +4,8 @@ inputs:
   - name: data_pickle
     type: Dataset
     description: "Pickle file containing DataWrapper object (STGNN formatted data)."
-  - name: Splitting_strategy
-    type: string
+  - name: splitting_strategy
+    type: String
     description: "Strategy for splitting data: temporal_split, anomaly_split, drift_split"
   - name: num_tasks
     type: Integer
