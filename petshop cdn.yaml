@@ -141,6 +141,10 @@ implementation:
       - {inputValue: config_string}
       - --bearer_token
       - {inputPath: bearer_token}
+      - --get_cdn
+      - {inputPath: get_cdn}
+      - --domain
+      - {inputPath: domain}
       - --pickle_cdn_url
       - {outputPath: pickle_cdn_url}
       - --config_cdn_url
