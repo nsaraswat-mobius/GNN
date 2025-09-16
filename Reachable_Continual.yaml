@@ -10,6 +10,10 @@ inputs:
   - name: num_tasks
     type: Integer
     description: "Number of continual learning tasks to create"
+  - name: config
+    type: String
+    description: "config"
+    
 outputs:
   - name: tasks_pickle
     type: Dataset
@@ -308,6 +312,7 @@ implementation:
         parser.add_argument('--splitting_strategy', type=str, default='temporal_split', help='Split strategy')
         parser.add_argument('--num_tasks', type=int, default=3, help='Number of tasks to create')
         parser.add_argument('--tasks_pickle', type=str, required=True, help='Output pickle for tasks')
+        parser.add_argument('--config', type=str, required=True, help='config')
         args = parser.parse_args()
 
         # Load DataWrapper object
@@ -315,7 +320,7 @@ implementation:
             data = pickle.load(f)
 
         # Split into continual tasks
-        splitter = TemporalDataSplitter(data, config=getattr(data, "config", {}), strategy=args.splitting_strategy)
+        splitter = TemporalDataSplitter(data, config=args.config, strategy=args.splitting_strategy)
         tasks = splitter.create_continual_tasks(num_tasks=args.num_tasks)
 
         # Save tasks list as pickle
@@ -331,5 +336,7 @@ implementation:
       - {inputValue: splitting_strategy}
       - --num_tasks
       - {inputValue: num_tasks}
+      - --config
+      - {inputValue: config}
       - --tasks_pickle
       - {outputPath: tasks_pickle}
