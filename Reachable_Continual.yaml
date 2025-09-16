@@ -320,7 +320,8 @@ implementation:
             data = pickle.load(f)
 
         # Split into continual tasks
-        splitter = TemporalDataSplitter(data, config=args.config, strategy=args.splitting_strategy)
+        config = json.loads(args.config)
+        splitter = TemporalDataSplitter(data, config=config, strategy=args.splitting_strategy)
         tasks = splitter.create_continual_tasks(num_tasks=int(args.num_tasks))
 
         # Save tasks list as pickle
