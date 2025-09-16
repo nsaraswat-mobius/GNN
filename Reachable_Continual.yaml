@@ -1,17 +1,19 @@
-name: Load JSON dataset for continual learning with STGNN compatibility
-description: Fetches JSON from API and prepares sequential tasks for continual learning with STGNN.
+name: STGNN Continual Tasks Generator
+description: Loads pickled STGNN dataset and splits it into continual learning tasks
 inputs:
-  - {name: api_url, type: String, description: 'API URL to fetch JSON dataset'}
-  - {name: access_token, type: string, description: 'Bearer access token for API auth'}
-  - {name: num_tasks, type: int, description: 'Number of continual learning tasks to create'}
-  - {name: splitting_strategy, type: string, description: 'Strategy for splitting data: temporal_split, anomaly_split, drift_split'}
-  - {name: test_size, type: float, description: 'Fraction of data to use for testing'}
-  - {name: val_size, type: float, description: 'Fraction of remaining data to use for validation'}
-  - {name: batch_size, type: int, description: 'Batch size for data loaders'}
+  - name: data_pickle
+    type: Dataset
+    description: "Pickle file containing DataWrapper object (STGNN formatted data)."
+  - name: splitting_strategy
+    type: string
+    description: "Strategy for splitting data: temporal_split, anomaly_split, drift_split"
+  - name: num_tasks
+    type: int
+    description: "Number of continual learning tasks to create"
 outputs:
-  - {name: task_datasets, type: Dataset, description: 'List of task datasets for continual learning'}
-  - {name: task_metadata, type: Dataset, description: 'Metadata for each continual learning task'}
-  - {name: scaler_data, type: Dataset, description: 'Data scaler for consistent normalization across tasks'}
+  - name: tasks_pickle
+    type: Dataset
+    description: "Pickle file containing list of continual learning tasks"
 implementation:
   container:
     image: python:3.9
@@ -19,224 +21,77 @@ implementation:
       - sh
       - -c
       - |
-        python3 -m pip install --quiet requests pandas scikit-learn numpy torch || \
-        python3 -m pip install --quiet requests pandas scikit-learn numpy torch --user
+        python3 -m pip install --quiet numpy torch || \
+        python3 -m pip install --quiet numpy torch --user
         exec "$0" "$@"
       - python3
       - -u
       - -c
       - |
-        import argparse
-        import os
-        import pickle
-        import pandas as pd
+        import argparse, os, pickle
         import numpy as np
-        import requests
-        from sklearn.model_selection import train_test_split
-        from sklearn.preprocessing import StandardScaler
         import torch
-        import json
 
-        # Simple DataLoaderM implementation for compatibility
-        class DataLoaderM:
-            def __init__(self, x_data, y_data, batch_size):
-                self.x_data = torch.FloatTensor(x_data) if not isinstance(x_data, torch.Tensor) else x_data
-                self.y_data = torch.FloatTensor(y_data) if not isinstance(y_data, torch.Tensor) else y_data
-                self.batch_size = batch_size
-                self.num_samples = len(x_data)
-                
-            def __len__(self):
-                return (self.num_samples + self.batch_size - 1) // self.batch_size
+        # import your splitter from the script
+        class TemporalDataSplitter:
+            """
+            Splits time-series data into temporal continual learning tasks.
+            Each task represents a different time period or data distribution.
+            """
             
-            def __iter__(self):
-                for i in range(0, self.num_samples, self.batch_size):
-                    end_idx = min(i + self.batch_size, self.num_samples)
-                    yield self.x_data[i:end_idx], self.y_data[i:end_idx]
+            def __init__(self, data, config, strategy='temporal_split'):
+                """
+                Initialize the temporal data splitter.
+                
+                Args:
+                    data: Original time-series data
+                    config: Model configuration
+                    strategy: Splitting strategy ('temporal_split', 'anomaly_split', 'drift_split')
+                """
+                self.data = data
+                self.config = config
+                self.strategy = strategy
+                
+            def create_continual_tasks(self, num_tasks: int = 3):
+                if self.strategy == 'temporal_split':
+                    return self._temporal_split(num_tasks)
+                elif self.strategy == 'anomaly_split':
+                    return self._anomaly_split(num_tasks)
+                elif self.strategy == 'drift_split':
+                    return self._drift_split(num_tasks)
+                else:
+                    raise ValueError(f"Unknown strategy: {self.strategy}")
+
+            # (your _temporal_split, _anomaly_split, _drift_split go here unchanged,
+            # indentation already fixed in the block you pasted)
 
         parser = argparse.ArgumentParser()
-        parser.add_argument('--api_url', type=str, required=True, help='API URL to fetch JSON dataset')
-        parser.add_argument('--access_token', type=str, required=True, help='Bearer token for API')
-        parser.add_argument('--num_tasks', type=int, default=3, help='Number of continual learning tasks')
-        parser.add_argument('--splitting_strategy', type=str, default='temporal_split', 
-                          help='Strategy: temporal_split, anomaly_split, drift_split')
-        parser.add_argument('--test_size', type=float, default=0.2, help='Test set fraction')
-        parser.add_argument('--val_size', type=float, default=0.2, help='Validation set fraction')
-        parser.add_argument('--batch_size', type=int, default=32, help='Batch size for data loaders')
-        parser.add_argument('--task_datasets', type=str, required=True, help='Path to output task datasets')
-        parser.add_argument('--task_metadata', type=str, required=True, help='Path to output task metadata')
-        parser.add_argument('--scaler_data', type=str, required=True, help='Path to output scaler data')
+        parser.add_argument('--data_pickle', type=str, required=True, help='Input DataWrapper pickle path')
+        parser.add_argument('--splitting_strategy', type=str, default='temporal_split', help='Split strategy')
+        parser.add_argument('--num_tasks', type=int, default=3, help='Number of tasks to create')
+        parser.add_argument('--tasks_pickle', type=str, required=True, help='Output pickle for tasks')
         args = parser.parse_args()
 
-        print(f"Starting continual dataset loading with {args.splitting_strategy} strategy")
-        print(f"Creating {args.num_tasks} tasks from API data...")
+        # Load DataWrapper object
+        with open(args.data_pickle, "rb") as f:
+            data = pickle.load(f)
 
-        # Read access token
-        with open(args.access_token, 'r') as f:
-            access_token = f.read().strip()
-        
-        # Fetch dataset from API - using exact payload from original brick
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {access_token}"
-        }
-        payload = {
-            "dbType": "TIDB",
-            "entityId": "",
-            "entityIds": [],
-            "ownedOnly": False,
-            "projections": [],
-            "filter": {},
-            "startTime": 0,
-            "endTime": 0
-        }
-        
-        print("Fetching data from API...")
-        resp = requests.post(args.api_url, headers=headers, json=payload)
-        resp.raise_for_status()
-        raw_data = resp.json()
-        
-        df = pd.DataFrame(raw_data)
-        print(f"Loaded {len(df)} samples from API")
-        
-        # Drop unwanted columns - exact same as original brick
-        drop_cols = ["piMetadata", "execution_timestamp", "pipelineid", "component_id", "projectid"]
-        df = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
-        
-        # Convert numeric columns properly - exact same as original brick
-        numeric_cols = ["endpoint_count", "reachable_frac", "deg_cent", "betw_cent", "clustering", "pagerank"]
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-        
-        # Keep only numeric float features
-        available_cols = [col for col in numeric_cols if col in df.columns]
-        df = df[available_cols]
-        
-        print(f"Using features: {available_cols}")
-        
-        # Handle missing values and anomaly labels - matching original approach
-        df = df.fillna(df.mean())
-        
-        # Handle anomalies: reachable_frac == 0.0 → anomaly=1 (from original brick)
-        anomaly_labels = None
-        if "reachable_frac" in df.columns:
-            anomaly_labels = (df["reachable_frac"] == 0.0).astype(np.int32)
-            print(f"Found {np.sum(anomaly_labels)} anomaly samples based on reachable_frac == 0.0")
-        
-        # For STGNN continual learning, we need time-series sequences
-        # But first do train-test split on raw data (no normalization yet)
-        train_df, test_df, train_anomalies, test_anomalies = train_test_split(
-            df, anomaly_labels if anomaly_labels is not None else np.zeros(len(df)), 
-            test_size=args.test_size, random_state=42, 
-            stratify=anomaly_labels if anomaly_labels is not None else None
-        )
-        
-        # Train-validation split
-        val_size_adjusted = args.val_size / (1 - args.test_size)
-        train_df_final, val_df, train_anomalies_final, val_anomalies = train_test_split(
-            train_df, train_anomalies, test_size=val_size_adjusted, random_state=42,
-            stratify=train_anomalies if anomaly_labels is not None else None
-        )
-        
-        print(f"Data splits - Train: {len(train_df_final)}, Val: {len(val_df)}, Test: {len(test_df)}")
-        
-        # Fit scaler on training data only
-        scaler = StandardScaler()
-        scaler.fit(train_df_final)
-        
-        # Transform all datasets
-        train_data_scaled = scaler.transform(train_df_final)
-        val_data_scaled = scaler.transform(val_df)
-        test_data_scaled = scaler.transform(test_df)
-        
-        # Convert to numpy arrays for task creation
-        x_train = train_data_scaled
-        y_train = train_data_scaled  # For autoencoder-style or next-step prediction
-        x_val = val_data_scaled
-        y_val = val_data_scaled
-        x_test = test_data_scaled
-        y_test = test_data_scaled
-        
-        print(f"Prepared data - Train: {x_train.shape}, Val: {x_val.shape}, Test: {x_test.shape}")
-        
-        # [Splitting strategies remain unchanged...]
-        # (Keeping the temporal_split, anomaly_split, drift_split functions as in your original code)
-        
-        # Apply the selected splitting strategy
-        print(f"Applying {args.splitting_strategy} strategy...")
-        
-        if args.splitting_strategy == 'temporal_split':
-            tasks = temporal_split(x_train, y_train, x_val, y_val, x_test, y_test, args.num_tasks)
-        elif args.splitting_strategy == 'anomaly_split':
-            tasks = anomaly_split(x_train, y_train, x_val, y_val, x_test, y_test, args.num_tasks)
-        elif args.splitting_strategy == 'drift_split':
-            tasks = drift_split(x_train, y_train, x_val, y_val, x_test, y_test, args.num_tasks)
-        else:
-            raise ValueError(f"Unknown splitting strategy: {args.splitting_strategy}")
-        
-        # Create task metadata
-        task_metadata = {
-            'num_tasks': len(tasks),
-            'splitting_strategy': args.splitting_strategy,
-            'feature_columns': available_cols,
-            'total_samples': len(df),
-            'train_samples': len(x_train),
-            'val_samples': len(x_val),
-            'test_samples': len(x_test),
-            'batch_size': args.batch_size,
-            'task_descriptions': [task['description'] for task in tasks],
-            'has_anomaly_labels': anomaly_labels is not None
-        }
-        
-        print(f"Created {len(tasks)} continual learning tasks:")
-        for i, task in enumerate(tasks):
-            print(f"  Task {i+1}: {task['description']} - Train: {len(task['x_train'])}, Val: {len(task['x_val'])}, Test: {len(task['x_test'])}")
-        
-        # Save task datasets
-        os.makedirs(os.path.dirname(args.task_datasets) or ".", exist_ok=True)
-        with open(args.task_datasets, "wb") as f:
+        # Split into continual tasks
+        splitter = TemporalDataSplitter(data, config=getattr(data, "config", {}), strategy=args.splitting_strategy)
+        tasks = splitter.create_continual_tasks(num_tasks=args.num_tasks)
+
+        # Save tasks list as pickle
+        os.makedirs(os.path.dirname(args.tasks_pickle) or ".", exist_ok=True)
+        with open(args.tasks_pickle, "wb") as f:
             pickle.dump(tasks, f)
-        
-        # Save task metadata
-        os.makedirs(os.path.dirname(args.task_metadata) or ".", exist_ok=True)
-        with open(args.task_metadata, "wb") as f:
-            pickle.dump(task_metadata, f)
-        
-        # Save scaler data (compatible with both original and continual learning)
-        os.makedirs(os.path.dirname(args.scaler_data) or ".", exist_ok=True)
-        scaler_info = {
-            'scaler': scaler,
-            'feature_columns': available_cols,
-            'batch_size': args.batch_size
-        }
-        with open(args.scaler_data, "wb") as f:
-            pickle.dump(scaler_info, f)
-        
-        print(f"Successfully processed and saved continual learning dataset")
-        print(f"   Strategy: {args.splitting_strategy}")
-        print(f"   Tasks: {len(tasks)}")
-        print(f"   Features: {len(available_cols)}")
-        print(f"   Batch size: {args.batch_size}")
-        print(f"   Has anomaly labels: {anomaly_labels is not None}")
 
+        print(f" Saved {len(tasks)} continual tasks → {args.tasks_pickle}")
     args:
-      - --api_url
-      - {inputValue: api_url}
-      - --access_token
-      - {inputPath: access_token}
-      - --num_tasks
-      - {inputValue: num_tasks}
+      - --data_pickle
+      - {inputPath: data_pickle}
       - --splitting_strategy
       - {inputValue: splitting_strategy}
-      - --test_size
-      - {inputValue: test_size}
-      - --val_size
-      - {inputValue: val_size}
-      - --batch_size
-      - {inputValue: batch_size}
-      - --task_datasets
-      - {outputPath: task_datasets}
-      - --task_metadata
-      - {outputPath: task_metadata}
-      - --scaler_data
-      - {outputPath: scaler_data}
+      - --num_tasks
+      - {inputValue: num_tasks}
+      - --tasks_pickle
+      - {outputPath: tasks_pickle}
