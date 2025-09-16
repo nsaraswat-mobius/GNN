@@ -5,6 +5,7 @@ inputs:
   - {name: config_string, type: String, description: "Configuration string (e.g., JSON)"}
   - {name: bearer_token, type: string, description: "Bearer token for CDN authentication"}
   - {name: domain, type: String, description: "domain"}
+  - {name: get_cdn, type: String, description: "domain"}
 outputs:
   - {name: pickle_cdn_url, type: String, description: "URL to the uploaded pickle file"}
   - {name: config_cdn_url, type: String, description: "URL to the uploaded config string"}
@@ -38,6 +39,8 @@ implementation:
         parser.add_argument('--pickle_cdn_url', type=str, required=True, help='Path to the output file for the pickle CDN URL.')
         parser.add_argument('--config_cdn_url', type=str, required=True, help='Path to the output file for the config CDN URL.')
         parser.add_argument('--bearer_token', type=str, required=True, help='Bearer token for CDN authentication.')
+        parser.add_argument('--domain', type=str, required=True, help='Bearer token for CDN authentication.')
+        parser.add_argument('--get_cdn', type=str, required=True, help='Bearer token for CDN authentication.')
         args = parser.parse_args()
 
         with open(args.bearer_token, 'r') as f:
@@ -80,7 +83,7 @@ implementation:
                     print("Full response:", process.stdout.decode('utf-8'))
                     raise ValueError("Failed to parse cdnUrl from CDN response.")
                 
-                content_url_value = f"https://cdn.mobiusdtaas.ai{relative_cdn_url}"
+                content_url_value = f"{args.get_cdn}{relative_cdn_url}"
 
                 print(f"Extracted CDN URL: {content_url_value}")
 
