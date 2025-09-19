@@ -23,16 +23,13 @@ implementation:
         import argparse, os, pickle, torch, json
         from torch_geometric.datasets import PPI
 
-        
         class DataContainer:
-            
             def __init__(self, train_dataset, test_dataset):
                 self.dataset = train_dataset
                 self.test_dataset = test_dataset
                 self.train_mask = None
                 self.test_mask = None
 
-       
         parser = argparse.ArgumentParser()
         parser.add_argument('--PPI_data', type=str, required=True)
         parser.add_argument('--config', type=str, required=True)
@@ -41,26 +38,22 @@ implementation:
         print(f" Input dataset path: {args.PPI_data}")
         print(f" Output JSON path: {args.config}")
 
-
         try:
             with open(args.PPI_data, "rb") as f:
-                data_dict = pickle.load(f)
+                container = pickle.load(f)   # ✅ load DataContainer directly
         except Exception as e:
             print(f"Failed to load dataset: {e}")
-        train_dataset = data_dict.dataset
-        test_dataset = data_dict.test_dataset
-        container = DataContainer(train_dataset, test_dataset)
+            raise
 
-        os.makedirs(os.path.dirname(args.config), exist_ok=True)
+        train_dataset = container.dataset
+        test_dataset = container.test_dataset
 
+        os.makedirs(os.path.dirname(args.config) or ".", exist_ok=True)  # ✅ safer
 
-       
         config = {}
         config['input_dim'] = train_dataset.num_features
         config['output_dim'] = train_dataset.num_classes
         config['loss_function'] = 'bce_with_logits'
-
-
 
         with open(args.config, 'w') as f:
             json.dump(config, f, indent=2)
@@ -68,7 +61,6 @@ implementation:
         print(f"Saved config to {args.config}")
         print(f"Example values:")
 
-        
     args:
       - --PPI_data
       - {inputPath: PPI_data}
