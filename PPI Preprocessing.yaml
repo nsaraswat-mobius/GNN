@@ -45,7 +45,6 @@ implementation:
         try:
             with open(args.PPI_data, "rb") as f:
                 data_dict = pickle.load(f)
-            print(f"Successfully loaded dataset dict with keys: {list(data_dict.keys())}")
         except Exception as e:
             print(f"Failed to load dataset: {e}")
         train_dataset = data_dict["train"]
