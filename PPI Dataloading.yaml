@@ -33,7 +33,7 @@ implementation:
         parser.add_argument('--PPI_data', type=str, required=True)
         args = parser.parse_args()
 
-        print(f"[INFO] Loading PPI dataset (train/val/test)")
+        print(f"Loading PPI dataset (train/val/test)")
 
         # Load splits separately
         train_dataset = PPI(root='/tmp/PPI', split='train')
@@ -42,16 +42,8 @@ implementation:
 
        # Create a container to hold the datasets
         data = DataContainer(train_dataset, test_dataset)
-        print("Dataset loaded successfully.")
+        print(f"Dataset loaded successfully.")
 
-
-        # Logging info
-        print(f"[INFO] Dataset loaded successfully")
-        print(f"[INFO] Train graphs: {len(train_dataset)}")
-        print(f"[INFO] Val graphs:   {len(val_dataset)}")
-        print(f"[INFO] Test graphs:  {len(test_dataset)}")
-        print(f"[INFO] Node feature dimension: {train_dataset.num_features}")
-        print(f"[INFO] Number of labels (multi-label): {train_dataset.num_classes}")
 
         # Ensure output directory
         os.makedirs(os.path.dirname(args.PPI_data), exist_ok=True)
@@ -60,7 +52,7 @@ implementation:
         with open(args.PPI_data, "wb") as f:
             pickle.dump(data, f)
 
-        print(f"[SUCCESS] Saved PPI dataset (train/val/test) to {args.PPI_data}")
+        print(f"Saved PPI dataset (train/val/test) to {args.PPI_data}")
     args:
       - --PPI_data
       - {outputPath: PPI_data}
