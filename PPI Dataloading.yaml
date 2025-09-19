@@ -1,5 +1,5 @@
 name: Load PPI Dataset
-description: Loads the PPI and saves it as a Dataset type.
+description: Loads the PPI dataset (train/val/test splits) and saves them as a Dataset type.
 outputs:
   - {name: PPI_data, type: Dataset}
 implementation:
@@ -21,55 +21,41 @@ implementation:
         import pickle
         import torch
         from torch_geometric.datasets import PPI
-        from torch_geometric.data import Data
-        def combine_snapshots(dataset):
-            """
-            Combine all snapshots in the EllipticBitcoinDataset into a single data object.
-            """
-            x_list = [snapshot.x for snapshot in dataset]
-            y_list = [snapshot.y for snapshot in dataset]
-            edge_index_list = [snapshot.edge_index for snapshot in dataset]
-            train_mask_list = [snapshot.train_mask for snapshot in dataset]
-            test_mask_list = [snapshot.test_mask for snapshot in dataset]
-        
-            # Concatenate features, labels, and masks
-            x = torch.cat(x_list, dim=0)
-            y = torch.cat(y_list, dim=0)
-            
-            # Adjust edge indices and concatenate
-            num_nodes = 0
-            for i in range(len(edge_index_list)):
-                edge_index_list[i] = edge_index_list[i] + num_nodes
-                num_nodes += x_list[i].shape[0]
-            edge_index = torch.cat(edge_index_list, dim=1)
-        
-            train_mask = torch.cat(train_mask_list, dim=0)
-            test_mask = torch.cat(test_mask_list, dim=0)
-        
-            return Data(x=x, y=y, edge_index=edge_index, train_mask=train_mask, test_mask=test_mask)
+
         parser = argparse.ArgumentParser()
         parser.add_argument('--PPI_data', type=str, required=True)
-        
         args = parser.parse_args()
-        
-        print(f"[INFO] Loading Elliptic Bitcoin Dataset...")
-        dataset = PPI(root='/tmp/PPI')
-        data = combine_snapshots(dataset)
-        
+
+        print(f"[INFO] Loading PPI dataset (train/val/test)...")
+
+        # Load splits separately
+        train_dataset = PPI(root='/tmp/PPI', split='train')
+        val_dataset   = PPI(root='/tmp/PPI', split='val')
+        test_dataset  = PPI(root='/tmp/PPI', split='test')
+
+        # Collect all splits into a dict
+        data_dict = {
+            "train": train_dataset,
+            "val": val_dataset,
+            "test": test_dataset
+        }
+
+        # Logging info
         print(f"[INFO] Dataset loaded successfully")
-        print(f"[INFO] Number of nodes: {data.x.shape[0]}")
-        print(f"[INFO] Number of edges: {data.edge_index.shape[1]}")
-        print(f"[INFO] Number of features: {data.x.shape[1]}")
-        print(f"[INFO] Unique labels: {torch.unique(data.y)}")
-        
+        print(f"[INFO] Train graphs: {len(train_dataset)}")
+        print(f"[INFO] Val graphs:   {len(val_dataset)}")
+        print(f"[INFO] Test graphs:  {len(test_dataset)}")
+        print(f"[INFO] Node feature dimension: {train_dataset.num_features}")
+        print(f"[INFO] Number of labels (multi-label): {train_dataset.num_classes}")
+
         # Ensure output directory
         os.makedirs(os.path.dirname(args.PPI_data), exist_ok=True)
-        
-        # Save the entire data object using pickle
-        with open(args.PPI_data, "wb") as f: pickle.dump(data, f)
-        
-        print(f"[SUCCESS] Saved PPI dataset to {args.PPI_data}")
-        
+
+        # Save dataset dict
+        with open(args.PPI_data, "wb") as f:
+            pickle.dump(data_dict, f)
+
+        print(f"[SUCCESS] Saved PPI dataset (train/val/test) to {args.PPI_data}")
     args:
       - --PPI_data
       - {outputPath: PPI_data}
