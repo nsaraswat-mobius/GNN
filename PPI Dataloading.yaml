@@ -9,8 +9,8 @@ implementation:
       - sh
       - -c
       - |
-        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet torch torchvision torchaudio torch_geometric pandas || \
-        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet torch torchvision torchaudio torch_geometric pandas --user
+        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet  torch_geometric pandas || \
+        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet torch_geometric pandas --user
         exec "$0" "$@"
       - python3
       - -u
@@ -19,7 +19,6 @@ implementation:
         import argparse
         import os
         import pickle
-        import torch
         from torch_geometric.datasets import PPI
 
         class DataContainer:
