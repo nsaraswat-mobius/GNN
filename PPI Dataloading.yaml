@@ -22,6 +22,13 @@ implementation:
         import torch
         from torch_geometric.datasets import PPI
 
+        class DataContainer:
+            def __init__(self, train_dataset, test_dataset):
+                self.dataset = train_dataset
+                self.test_dataset = test_dataset
+                self.train_mask = None
+                self.test_mask = None
+                
         parser = argparse.ArgumentParser()
         parser.add_argument('--PPI_data', type=str, required=True)
         args = parser.parse_args()
@@ -33,12 +40,10 @@ implementation:
         val_dataset   = PPI(root='/tmp/PPI', split='val')
         test_dataset  = PPI(root='/tmp/PPI', split='test')
 
-        # Collect all splits into a dict
-        data_dict = {
-            "train": train_dataset,
-            "val": val_dataset,
-            "test": test_dataset
-        }
+       # Create a container to hold the datasets
+        data = DataContainer(train_dataset, test_dataset)
+        print("Dataset loaded successfully.")
+
 
         # Logging info
         print(f"[INFO] Dataset loaded successfully")
@@ -53,7 +58,7 @@ implementation:
 
         # Save dataset dict
         with open(args.PPI_data, "wb") as f:
-            pickle.dump(data_dict, f)
+            pickle.dump(data, f)
 
         print(f"[SUCCESS] Saved PPI dataset (train/val/test) to {args.PPI_data}")
     args:
