@@ -4,8 +4,6 @@ inputs:
   - name: PPI_data
     type: Dataset
 outputs:
-  - name: weights_out1
-    type: String
   - name: config
     type: String
 implementation:
@@ -25,7 +23,7 @@ implementation:
         import argparse, os, pickle, torch, json
         from torch_geometric.datasets import PPI
 
-        # --- Data container ---
+        
         class DataContainer:
             
             def __init__(self, train_dataset, test_dataset):
@@ -34,94 +32,46 @@ implementation:
                 self.train_mask = None
                 self.test_mask = None
 
-        # --- Model factory ---
-        try:
-            from nesy_factory.model_zoo import create_model
-        except ImportError:
-            print(" create_model not found. Replace import with your own factory.")
-            def create_model(name, cfg): 
-                return type("Dummy", (), {"get_model_info": lambda self: "N/A"})()
-
-        # --- Helper ---
-        def analyze_class_distribution(dataset):
-            labels = []
-            for data in dataset:
-                labels.append(data.y.numpy())
-            labels = torch.tensor(labels)
-            class_counts = labels.sum(dim=0).numpy()
-            total = class_counts.sum()
-            class_weights = (total / (len(class_counts) * class_counts)).tolist()
-            alpha_weights = (class_counts / total).tolist()
-            return alpha_weights, class_weights
-
-        # --- Args ---
+       
         parser = argparse.ArgumentParser()
         parser.add_argument('--PPI_data', type=str, required=True)
-        parser.add_argument('--weights_out1', type=str, required=True)
         parser.add_argument('--config', type=str, required=True)
         args = parser.parse_args()
 
         print(f" Input dataset path: {args.PPI_data}")
-        print(f" Output JSON path (weights): {args.weights_out1}")
-        print(f" Output JSON path (config): {args.config}")
+        print(f" Output JSON path: {args.config}")
 
-        # --- Load dataset ---
+
         try:
             with open(args.PPI_data, "rb") as f:
                 data_dict = pickle.load(f)
             print(f"Successfully loaded dataset dict with keys: {list(data_dict.keys())}")
         except Exception as e:
-            print(f"[ERROR] Failed to load dataset: {e}")
-            import traceback; traceback.print_exc()
-            exit(1)
-
+            print(f"Failed to load dataset: {e}")
         train_dataset = data_dict["train"]
         test_dataset = data_dict.get("test", None)
         container = DataContainer(train_dataset, test_dataset)
 
-        os.makedirs(os.path.dirname(args.weights_out1), exist_ok=True)
         os.makedirs(os.path.dirname(args.config), exist_ok=True)
 
-        try:
-            # --- Distribution ---
-            alpha_weights, class_weights = analyze_class_distribution(train_dataset)
 
-            weights_dict = {
-                'focal_loss_alpha': alpha_weights,
-                'class_weights': class_weights
-            }
-            with open(args.weights_out1, 'w') as f:
-                json.dump(weights_dict, f, indent=2)
+       
+        config = {}
+        config['input_dim'] = train_dataset.num_features
+        config['output_dim'] = train_dataset.num_classes
+        config['loss_function'] = 'bce_with_logits'
 
-            # --- Config ---
-            config = {}
-            config['input_dim'] = train_dataset.num_features
-            config['output_dim'] = train_dataset.num_classes
-            config['loss_function'] = 'bce_with_logits'
 
-            # --- Model ---
-            model = create_model('gcn', config)
-            print(config)
-            print("Model created successfully.")
-            print(model.get_model_info())
 
-            with open(args.config, 'w') as f:
-                json.dump(config, f, indent=2)
+        with open(args.config, 'w') as f:
+            json.dump(config, f, indent=2)
 
-            print(f" Saved weights to {args.weights_out1}")
-            print(f"Saved config to {args.config}")
-            print(f" Example values (first 5 classes):")
-            print(f"  Class Weights: {class_weights[:5]}")
-            print(f"  Alpha Weights: {alpha_weights[:5]}")
+        print(f"Saved config to {args.config}")
+        print(f"Example values:")
 
-        except Exception as e:
-            print(f" Failed during analysis: {e}")
-            import traceback; traceback.print_exc()
-            exit(1)
+        
     args:
       - --PPI_data
       - {inputPath: PPI_data}
-      - --weights_out1
-      - {outputPath: weights_out1}
       - --config
       - {outputPath: config}
