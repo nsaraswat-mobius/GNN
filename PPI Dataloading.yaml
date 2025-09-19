@@ -9,8 +9,8 @@ implementation:
       - sh
       - -c
       - |
-        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet  torch_geometric pandas || \
-        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet torch_geometric pandas --user
+        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet torch torch_geometric pandas || \
+        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet torch torch_geometric pandas --user
         exec "$0" "$@"
       - python3
       - -u
