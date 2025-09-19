@@ -27,7 +27,7 @@ implementation:
 
         # --- Data container ---
         class DataContainer:
-            """A container to hold datasets and mimic the single-graph data object structure."""
+            
             def __init__(self, train_dataset, test_dataset):
                 self.dataset = train_dataset
                 self.test_dataset = test_dataset
