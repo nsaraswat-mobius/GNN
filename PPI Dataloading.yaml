@@ -33,7 +33,7 @@ implementation:
         parser.add_argument('--PPI_data', type=str, required=True)
         args = parser.parse_args()
 
-        print(f"[INFO] Loading PPI dataset (train/val/test)...")
+        print(f"[INFO] Loading PPI dataset (train/val/test)")
 
         # Load splits separately
         train_dataset = PPI(root='/tmp/PPI', split='train')
