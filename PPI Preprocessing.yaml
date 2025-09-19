@@ -47,8 +47,8 @@ implementation:
                 data_dict = pickle.load(f)
         except Exception as e:
             print(f"Failed to load dataset: {e}")
-        train_dataset = data_dict["train"]
-        test_dataset = data_dict.get("test", None)
+        train_dataset = data_dict.dataset
+        test_dataset = data_dict.test_dataset
         container = DataContainer(train_dataset, test_dataset)
 
         os.makedirs(os.path.dirname(args.config), exist_ok=True)
