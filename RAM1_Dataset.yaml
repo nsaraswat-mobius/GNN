@@ -28,6 +28,9 @@ implementation:
         import numpy as np
         import requests
         from sklearn.model_selection import train_test_split
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+        import logging
 
         parser = argparse.ArgumentParser()
         parser.add_argument('--api_url', type=str, required=True, help='API URL to fetch JSON dataset')
@@ -40,7 +43,23 @@ implementation:
         with open(args.access_token, 'r') as f:
             access_token = f.read().strip()
         
-        # Fetch dataset from API
+        # Setup retry logger
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger("api_retry")
+
+        # Setup session with retry logic
+        session = requests.Session()
+        retries = Retry(
+            total=5,                # total retries
+            backoff_factor=1,       # wait 1s, 2s, 4s, ...
+            status_forcelist=[500, 502, 503, 504],
+            allowed_methods=["POST"]
+        )
+        adapter = HTTPAdapter(max_retries=retries)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+
+        # Fetch dataset from API with retry + timeout
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {access_token}"
@@ -55,9 +74,15 @@ implementation:
             "startTime": 0,
             "endTime": 0
         }
-        resp = requests.post(args.api_url, headers=headers, json=payload)
-        resp.raise_for_status()
-        raw_data = resp.json()
+
+        try:
+            logger.info("📡 Sending request to API with retries enabled...")
+            resp = session.post(args.api_url, headers=headers, json=payload, timeout=30)
+            resp.raise_for_status()
+            raw_data = resp.json()
+        except requests.exceptions.RequestException as e:
+            logger.error(f" API request failed after retries: {e}")
+            raise
         
         df = pd.DataFrame(raw_data)
         
@@ -96,7 +121,7 @@ implementation:
         with open(args.anomaly_data, "wb") as f:
             pickle.dump(test_labels, f)
         
-        print(f" Successfully processed and saved dataset (from API).")
+        print(" Successfully processed and saved dataset (from API with retry/timeout).")
     args:
       - --api_url
       - {inputValue: api_url}
