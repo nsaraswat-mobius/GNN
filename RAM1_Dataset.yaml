@@ -95,6 +95,9 @@ implementation:
         for col in numeric_cols:
             df[col] = pd.to_numeric(df[col], errors="coerce")
         
+        # Replace NaN with 0
+        df.fillna(0, inplace=True)
+        
         # Keep only numeric float features
         df = df[numeric_cols]
         
