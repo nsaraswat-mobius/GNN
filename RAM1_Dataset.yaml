@@ -51,7 +51,7 @@ implementation:
         session = requests.Session()
         retries = Retry(
             total=5,                # total retries
-            backoff_factor=1,       # wait 1s, 2s, 4s, ...
+            backoff_factor=1,       # wait 1s, 2s, 4s
             status_forcelist=[500, 502, 503, 504],
             allowed_methods=["POST"]
         )
@@ -76,7 +76,7 @@ implementation:
         }
 
         try:
-            logger.info("📡 Sending request to API with retries enabled...")
+            logger.info(" Sending request to API with retries enabled")
             resp = session.post(args.api_url, headers=headers, json=payload, timeout=30)
             resp.raise_for_status()
             raw_data = resp.json()
@@ -120,8 +120,7 @@ implementation:
         os.makedirs(os.path.dirname(args.anomaly_data) or ".", exist_ok=True)
         with open(args.anomaly_data, "wb") as f:
             pickle.dump(test_labels, f)
-        
-        print(" Successfully processed and saved dataset (from API with retry/timeout).")
+            
     args:
       - --api_url
       - {inputValue: api_url}
