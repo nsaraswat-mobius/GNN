@@ -20,7 +20,7 @@ outputs:
     description: "Pickle file containing list of continual learning tasks"
 implementation:
   container:
-    image: python:3.9
+    image: gurpreetgandhi/nesy-factory:v12
     command:
       - sh
       - -c
@@ -32,10 +32,10 @@ implementation:
         ping -c 3 pypi.org || echo " Cannot reach pypi.org"
         ping -c 3 files.pythonhosted.org || echo " Cannot reach files.pythonhosted.org"
 
-        echo " Installing numpy and torch"
-        python3 -m pip install -vvv numpy torch || {
+        echo " Installing numpy"
+        python3 -m pip install -vvv numpy || {
           echo " Pip install failed. Retrying with user"
-          python3 -m pip install -vvv numpy torch user
+          python3 -m pip install -vvv numpy user
         }
 
         echo " Dependencies installed. Running script"
