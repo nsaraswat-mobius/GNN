@@ -25,8 +25,20 @@ implementation:
       - sh
       - -c
       - |
-        python3 -m pip install --quiet numpy torch || \
-        python3 -m pip install --quiet numpy torch --user
+        echo " Starting dependency installation"
+        echo " Python version: $(python3 --version)"
+        echo " Pip version: $(python3 -m pip --version)"
+        echo "  Checking network"
+        ping -c 3 pypi.org || echo " Cannot reach pypi.org"
+        ping -c 3 files.pythonhosted.org || echo " Cannot reach files.pythonhosted.org"
+
+        echo " Installing numpy and torch"
+        python3 -m pip install -vvv numpy torch || {
+          echo " Pip install failed. Retrying with user"
+          python3 -m pip install -vvv numpy torch user
+        }
+
+        echo " Dependencies installed. Running script"
         exec "$0" "$@"
       - python3
       - -u
