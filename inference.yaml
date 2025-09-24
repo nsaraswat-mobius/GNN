@@ -55,7 +55,6 @@ implementation:
         from nesy_factory.GNNs import STGNNModel  # adjust if needed
         model = STGNNModel(config)
         model.load_state_dict(torch.load(args.model_weights, map_location="cpu"))
-        model.eval()
         
         # Define inference function
         def infer_and_detect_anomaly(model, data, config):
