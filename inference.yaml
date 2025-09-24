@@ -14,6 +14,12 @@ inputs:
   - name: config
     type: string
     description: "Optional config JSON string for model"
+  - name: weights
+    type: Model
+    description: "Additional trained model weights"
+  - name: config_json
+    type: string
+    description: "Additional config JSON string for model"
 
 outputs:
   - name: inference_result
@@ -34,27 +40,45 @@ implementation:
       - -u
       - -c
       - |
-        import argparse, os, pickle, torch, json
+        import argparse, os, torch, json
+        from nesy_factory.utils.data_utils import load_dataset, DataWrapper
+        from nesy_factory.utils.config_utils import get_config_by_name
+        from nesy_factory.GNNs.model_factory import create_model
         
         parser = argparse.ArgumentParser()
         parser.add_argument('--query', type=str, required=True, help='Query input for inference')
-        parser.add_argument('--dataset', type=str, required=True, help='Path to dataset pickle file')
+        parser.add_argument('--dataset', type=str, required=True, help='Path to dataset directory')
         parser.add_argument('--model_weights', type=str, required=True, help='Path to trained model weights')
         parser.add_argument('--config', type=str, required=False, help='Optional config JSON string')
+        parser.add_argument('--weights', type=str, required=False, help='Path to additional trained model weights')
+        parser.add_argument('--config_json', type=str, required=False, help='Additional config JSON string')
         parser.add_argument('--inference_result', type=str, required=True, help='Path to save inference result JSON')
         args = parser.parse_args()
         
-        # Load dataset
-        with open(args.dataset, "rb") as f:
-            data = pickle.load(f)
-        
-        # Load config
+        # Load configs and merge
         config = json.loads(args.config) if args.config else {}
+        if args.config_json:
+            config.update(json.loads(args.config_json))
         
-        # Load model class dynamically (placeholder)
-        from nesy_factory.GNNs import STGNNModel  # adjust if needed
-        model = STGNNModel(config)
+        # Load dataset using DataWrapper
+        data_dict = load_dataset(args.dataset, config)
+        data = DataWrapper(data_dict)
+        print(f"Loaded Config: {config}")
+        
+        # Load model using config and factory method
+        print("\nCreating STGNN model from config...")
+        config = get_config_by_name('basic_stgnn', 'configs/stgnn_configs.yaml')
+        
+        model = create_model('stgnn', config)
         model.load_state_dict(torch.load(args.model_weights, map_location="cpu"))
+        
+        print("Model created successfully.")
+        print(model.get_model_info())
+        
+        # Optionally load second weights
+        if args.weights and os.path.exists(args.weights):
+            add_state = torch.load(args.weights, map_location="cpu")
+            model.load_state_dict(add_state, strict=False)
         
         # Define inference function
         def infer_and_detect_anomaly(model, data, config):
@@ -65,6 +89,9 @@ implementation:
             
             single_x = torch.Tensor(data.x_test[inference_idx:inference_idx+1]).to(model.device)
             single_y_true = data.y_test[inference_idx:inference_idx+1]
+            
+            print(f"Single X Tensor: {single_x}")
+            print(f"Single Y True: {single_y_true}")
             
             json_result = model.infer_step(
                 single_x=single_x,
@@ -82,7 +109,7 @@ implementation:
         with open(args.inference_result, "w") as f:
             json.dump(result, f, indent=2)
         
-        print(" Inference completed. Results saved.")
+        print("Inference completed. Results saved.")
 
     args:
       - --query
@@ -93,5 +120,9 @@ implementation:
       - inputPath: model_weights
       - --config
       - inputValue: config
+      - --weights
+      - inputPath: weights
+      - --config_json
+      - inputValue: config_json
       - --inference_result
       - outputPath: inference_result
