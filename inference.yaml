@@ -22,13 +22,13 @@ outputs:
 
 implementation:
   container:
-    image: python:3.9
+    image: gurpreetgandhi/nesy-factory:v12
     command:
       - sh
       - -c
       - |
-        python3 -m pip install --quiet torch || \
-        python3 -m pip install --quiet torch --user
+        python3 -m pip install || \
+        python3 -m pip install --user
         exec "$0" "$@"
       - python3
       - -u
