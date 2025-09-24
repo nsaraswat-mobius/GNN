@@ -17,7 +17,7 @@ outputs:
     type: Model
     description: "Downloaded model weights for inference"
   - name: pickle_file
-    type: Data
+    type: Dataset
     description: "Downloaded pickle file"
 
 implementation:
