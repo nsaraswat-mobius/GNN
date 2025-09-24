@@ -58,7 +58,7 @@ implementation:
         print(f"Loaded Config: {config}")
         
         # Load model using config and factory method
-        print(f"\nCreating STGNN model from config")
+        print(f"Creating STGNN model from config")
         model = create_model('stgnn', config)
         model.load_state_dict(torch.load(args.model_weights, map_location="cpu"))
         
