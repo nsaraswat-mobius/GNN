@@ -11,12 +11,6 @@ inputs:
   - name: model_weights
     type: Model
     description: "Trained model weights for inference"
-  - name: config
-    type: string
-    description: "Optional config JSON string for model"
-  - name: weights
-    type: Model
-    description: "Additional trained model weights"
   - name: config_json
     type: String
     description: "Additional config JSON string for model"
@@ -49,8 +43,6 @@ implementation:
         parser.add_argument('--query', type=str, required=True, help='Query input for inference')
         parser.add_argument('--dataset', type=str, required=True, help='Path to dataset directory')
         parser.add_argument('--model_weights', type=str, required=True, help='Path to trained model weights')
-        parser.add_argument('--config', type=str, required=False, help='Optional config JSON string')
-        parser.add_argument('--weights', type=str, required=False, help='Path to additional trained model weights')
         parser.add_argument('--config_json', type=str, required=False, help='Additional config JSON string')
         parser.add_argument('--inference_result', type=str, required=True, help='Path to save inference result JSON')
         args = parser.parse_args()
@@ -118,10 +110,6 @@ implementation:
       - inputPath: dataset
       - --model_weights
       - inputPath: model_weights
-      - --config
-      - inputValue: config
-      - --weights
-      - inputPath: weights
       - --config_json
       - inputValue: config_json
       - --inference_result
