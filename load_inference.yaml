@@ -8,6 +8,9 @@ inputs:
   - name: access_token
     type: string
     description: "Optional Bearer access token file for CDN auth"
+  - name: pickle_file
+    type: Data
+    description: "Optional pickle file input for supplementary model state"
 
 outputs:
   - name: model_weights
@@ -35,6 +38,7 @@ implementation:
         parser = argparse.ArgumentParser()
         parser.add_argument('--weights_cdn_url', type=str, required=True, help='CDN URL of weights file')
         parser.add_argument('--access_token', type=str, required=False, help='Path to access token file')
+        parser.add_argument('--pickle_file', type=str, required=False, help='Optional pickle file input')
         parser.add_argument('--model_weights', type=str, required=True, help='Path to save model weights')
         args = parser.parse_args()
         
@@ -75,6 +79,9 @@ implementation:
             
             logger.info(f" Weights successfully downloaded to {args.model_weights}")
             
+            if args.pickle_file:
+                logger.info(f" Pickle file provided at {args.pickle_file}")
+            
         except requests.exceptions.RequestException as e:
             logger.error(f" Failed to download weights after retries: {e}")
             raise
@@ -84,5 +91,7 @@ implementation:
       - inputValue: weights_cdn_url
       - --access_token
       - inputPath: access_token
+      - --pickle_file
+      - inputPath: pickle_file
       - --model_weights
       - outputPath: model_weights
