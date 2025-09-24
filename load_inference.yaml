@@ -8,14 +8,17 @@ inputs:
   - name: access_token
     type: string
     description: "Optional Bearer access token file for CDN auth"
-  - name: pickle_file
-    type: Data
-    description: "Optional pickle file input for supplementary model state"
+  - name: pickle_cdn_url
+    type: string
+    description: "CDN URL to download supplementary pickle file"
 
 outputs:
   - name: model_weights
     type: Model
     description: "Downloaded model weights for inference"
+  - name: pickle_file
+    type: Data
+    description: "Downloaded pickle file"
 
 implementation:
   container:
@@ -38,8 +41,9 @@ implementation:
         parser = argparse.ArgumentParser()
         parser.add_argument('--weights_cdn_url', type=str, required=True, help='CDN URL of weights file')
         parser.add_argument('--access_token', type=str, required=False, help='Path to access token file')
-        parser.add_argument('--pickle_file', type=str, required=False, help='Optional pickle file input')
+        parser.add_argument('--pickle_cdn_url', type=str, required=False, help='CDN URL of pickle file')
         parser.add_argument('--model_weights', type=str, required=True, help='Path to save model weights')
+        parser.add_argument('--pickle_file', type=str, required=True, help='Path to save pickle file')
         args = parser.parse_args()
         
         # Load token if provided
@@ -65,25 +69,23 @@ implementation:
         session.mount("http://", adapter)
         session.mount("https://", adapter)
         
-        os.makedirs(os.path.dirname(args.model_weights) or ".", exist_ok=True)
-        
-        try:
-            logger.info(" Downloading weights with retry + timeout")
-            resp = session.get(args.weights_cdn_url, headers=headers, stream=True, timeout=60)
+        def download_file(url, out_path, name):
+            logger.info(f" Downloading {name} with retry + timeout")
+            resp = session.get(url, headers=headers, stream=True, timeout=60)
             resp.raise_for_status()
-            
-            with open(args.model_weights, "wb") as f:
+            os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+            with open(out_path, "wb") as f:
                 for chunk in resp.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
-            
-            logger.info(f" Weights successfully downloaded to {args.model_weights}")
-            
-            if args.pickle_file:
-                logger.info(f" Pickle file provided at {args.pickle_file}")
-            
+            logger.info(f" {name} successfully downloaded to {out_path}")
+        
+        try:
+            download_file(args.weights_cdn_url, args.model_weights, "weights")
+            if args.pickle_cdn_url:
+                download_file(args.pickle_cdn_url, args.pickle_file, "pickle file")
         except requests.exceptions.RequestException as e:
-            logger.error(f" Failed to download weights after retries: {e}")
+            logger.error(f" Failed to download file after retries: {e}")
             raise
 
     args:
@@ -91,7 +93,9 @@ implementation:
       - inputValue: weights_cdn_url
       - --access_token
       - inputPath: access_token
-      - --pickle_file
-      - inputPath: pickle_file
+      - --pickle_cdn_url
+      - inputValue: pickle_cdn_url
       - --model_weights
       - outputPath: model_weights
+      - --pickle_file
+      - outputPath: pickle_file
