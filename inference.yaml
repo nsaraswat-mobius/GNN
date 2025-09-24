@@ -47,25 +47,25 @@ implementation:
         parser.add_argument('--inference_result', type=str, required=True, help='Path to save inference result JSON')
         args = parser.parse_args()
         
-        # Load base config and update with JSON overrides
+        # Load configs and merge
         config = get_config_by_name('basic_stgnn', 'configs/stgnn_configs.yaml')
         if args.config_json:
             config.update(json.loads(args.config_json))
         
-        # Load dataset
+        # Load dataset using DataWrapper
         data_dict = load_dataset(args.dataset, config)
         data = DataWrapper(data_dict)
         print(f"Loaded Config: {config}")
         
-        # Load model
-        print("\nCreating STGNN model from config")
+        # Load model using config and factory method
+        print(f"\nCreating STGNN model from config")
         model = create_model('stgnn', config)
         model.load_state_dict(torch.load(args.model_weights, map_location="cpu"))
         
-        print(f"Model created successfully.")
+        print("Model created successfully.")
         print(model.get_model_info())
         
-        # Inference function
+        # Define inference function
         def infer_and_detect_anomaly(model, data, config):
             inference_idx = 100
             if len(data.x_test) <= inference_idx:
