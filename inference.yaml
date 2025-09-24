@@ -18,7 +18,7 @@ inputs:
     type: Model
     description: "Additional trained model weights"
   - name: config_json
-    type: string
+    type: String
     description: "Additional config JSON string for model"
 
 outputs:
