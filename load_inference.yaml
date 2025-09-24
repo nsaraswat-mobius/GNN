@@ -1,10 +1,19 @@
 name: Load Weights from CDN
 description: Downloads model weights from a CDN URL with retry logic and makes them available for inference.
+
 inputs:
-  - {name: weights_cdn_url, type: String, description: "CDN URL to download model weights (.pth/.pt/.pkl)"}
-  - {name: access_token, type: string, description: "Optional Bearer access token file for CDN auth"}
+  - name: weights_cdn_url
+    type: string
+    description: "CDN URL to download model weights (.pth/.pt/.pkl)"
+  - name: access_token
+    type: string
+    description: "Optional Bearer access token file for CDN auth"
+
 outputs:
-  - {name: model_weights, type: Model, description: "Downloaded model weights for inference"}
+  - name: model_weights
+    type: Model
+    description: "Downloaded model weights for inference"
+
 implementation:
   container:
     image: python:3.9
@@ -22,24 +31,24 @@ implementation:
         import argparse, os, requests, logging
         from requests.adapters import HTTPAdapter
         from urllib3.util.retry import Retry
-
+        
         parser = argparse.ArgumentParser()
         parser.add_argument('--weights_cdn_url', type=str, required=True, help='CDN URL of weights file')
         parser.add_argument('--access_token', type=str, required=False, help='Path to access token file')
         parser.add_argument('--model_weights', type=str, required=True, help='Path to save model weights')
         args = parser.parse_args()
-
+        
         # Load token if provided
         headers = {}
         if args.access_token and os.path.exists(args.access_token):
             with open(args.access_token, 'r') as f:
                 token = f.read().strip()
                 headers["Authorization"] = f"Bearer {token}"
-
+        
         # Setup retry logger
         logging.basicConfig(level=logging.INFO)
         logger = logging.getLogger("cdn_retry")
-
+        
         # Setup session with retries
         session = requests.Session()
         retries = Retry(
@@ -51,28 +60,29 @@ implementation:
         adapter = HTTPAdapter(max_retries=retries)
         session.mount("http://", adapter)
         session.mount("https://", adapter)
-
+        
         os.makedirs(os.path.dirname(args.model_weights) or ".", exist_ok=True)
-
+        
         try:
             logger.info(" Downloading weights with retry + timeout")
             resp = session.get(args.weights_cdn_url, headers=headers, stream=True, timeout=60)
             resp.raise_for_status()
-
+            
             with open(args.model_weights, "wb") as f:
                 for chunk in resp.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
-
+            
             logger.info(f" Weights successfully downloaded to {args.model_weights}")
-
+            
         except requests.exceptions.RequestException as e:
             logger.error(f" Failed to download weights after retries: {e}")
             raise
+
     args:
       - --weights_cdn_url
-      - {inputValue: weights_cdn_url}
+      - inputValue: weights_cdn_url
       - --access_token
-      - {inputPath: access_token}
+      - inputPath: access_token
       - --model_weights
-      - {outputPath: model_weights}
+      - outputPath: model_weights
