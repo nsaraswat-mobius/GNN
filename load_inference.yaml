@@ -38,141 +38,127 @@ implementation:
         parser.add_argument('--pickle_file', type=str, required=True, help='Path to save pickle file')
         args = parser.parse_args()
         
-        # Load token if provided
         headers = {}
         if args.access_token and os.path.exists(args.access_token):
             with open(args.access_token, 'r') as f:
                 token = f.read().strip()
                 headers["Authorization"] = f"Bearer {token}"
         
-        # Setup retry logger
         logging.basicConfig(level=logging.INFO)
         logger = logging.getLogger("cdn_retry")
         
-        # Setup session with retries
         session = requests.Session()
         retries = Retry(
-            total=5,
-            backoff_factor=2,  # Increased backoff
-            status_forcelist=[400, 500, 502, 503, 504],  # Added 400 for temp failures
+            total=3,
+            backoff_factor=2,
+            status_forcelist=[500, 502, 503, 504],
             allowed_methods=["GET"]
         )
         adapter = HTTPAdapter(max_retries=retries)
         session.mount("http://", adapter)
         session.mount("https://", adapter)
         
-        def decode_cdn_url(url):
-            # Handle both standard URL encoding and custom _ENC() wrapper
+        def generate_url_variants(url):
             decoded_url = unquote(url)
+            logger.info(f"Decoded original URL: {decoded_url}")
+            
+            variants = []
+            
             if '_ENC(' in decoded_url:
-                logger.warning(f"URL contains _ENC() wrapper: {decoded_url}")
-                # Extract the encrypted part
-                import re
+                logger.warning(f"URL contains _ENC() wrapper")
                 enc_match = re.search(r'_ENC\(([^)]+)\)', decoded_url)
                 if enc_match:
                     encrypted_part = enc_match.group(1)
                     logger.info(f"Encrypted part: {encrypted_part}")
                     
-                    # TODO: Implement proper decryption logic here
-                    # This is a placeholder - you need the actual decryption method
                     try:
-                        # Try base64 decode as a first attempt
-                        import base64
-                        decoded_bytes = base64.b64decode(encrypted_part + '==')  # Add padding
+                        decoded_bytes = base64.b64decode(encrypted_part + '==')
                         decrypted_path = decoded_bytes.decode('utf-8')
-                        logger.info(f"Attempted decryption: {decrypted_path}")
-                        
-                        # Replace the _ENC() wrapper with the decrypted path
-                        final_url = decoded_url.replace(f"_ENC({encrypted_part})", decrypted_path)
-                        logger.info(f"Final decoded URL: {final_url}")
-                        return final_url
-                        
+                        logger.info(f"Base64 decryption succeeded: {decrypted_path}")
+                        decrypted_url = decoded_url.replace(f"_ENC({encrypted_part})", decrypted_path)
+                        variants.append(decrypted_url)
                     except Exception as e:
-                        logger.error(f"Failed to decrypt _ENC() wrapper: {e}")
-                        logger.error("Attempting to remove _ENC() wrapper entirely...")
-                        
-                        # Last resort: try removing the entire _ENC() wrapper
-                        # This might work if the CDN also accepts direct paths
-                        fallback_url = re.sub(r'/_ENC\([^)]+\)', '', decoded_url)
-                        
-                        # Also try different $ handling approaches
-                        url_variants = [
-                            fallback_url,  # Keep $
-                            fallback_url.replace('_$_', '_'),  # Replace _$_ with _
-                            fallback_url.replace('$', ''),     # Remove $ entirely
-                            fallback_url.replace('_$_', '__'), # Replace _$_ with __
-                        ]
-                        
-                        logger.info(f"Trying {len(url_variants)} URL variants:")
-                        for i, variant in enumerate(url_variants):
-                            logger.info(f"  Variant {i+1}: {variant}")
-                        
-                        # For now, return the first variant (we can enhance this to try multiple)
-                        return url_variants[0]
-                else:
-                    logger.error("Could not extract encrypted part from _ENC() wrapper")
-                    return decoded_url
-            return decoded_url
+                        logger.warning(f"Base64 decryption failed: {e}")
+                
+                base_url = re.sub(r'/_ENC\([^)]+\)', '', decoded_url)
+                logger.info(f"Base URL after removing _ENC: {base_url}")
+                
+                variants.extend([
+                    base_url,
+                    base_url.replace('_$$_', '_'),
+                    base_url.replace('$$', ''),
+                    base_url.replace('_$$_', '__'),
+                    base_url.replace('_$$_', 'V1'),
+                ])
+            else:
+                variants.append(decoded_url)
+            
+            unique_variants = []
+            for v in variants:
+                if v not in unique_variants:
+                    unique_variants.append(v)
+            
+            logger.info(f"Generated {len(unique_variants)} unique URL variants:")
+            for i, variant in enumerate(unique_variants, 1):
+                logger.info(f"  {i}. {variant}")
+            
+            return unique_variants
         
-        def download_file(url, out_path, name):
-            try:
-                processed_url = decode_cdn_url(url)
-                logger.info(f"Downloading {name} from {processed_url} with retry + timeout")
-                logger.info(f"Original URL: {url}")
-                logger.info(f"Processed URL: {processed_url}")
-                logger.info(f"Headers: {dict(headers)}")
-                resp = session.get(processed_url, headers=headers, stream=True, timeout=120)
-                resp.raise_for_status()
-                os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-                total_size = int(resp.headers.get('content-length', 0))
-                downloaded = 0
-                with open(out_path, "wb") as f:
-                    for chunk in resp.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            if total_size > 0:
-                                percent = (downloaded / total_size) * 100
-                                if downloaded % (1024 * 1024) == 0:
-                                    logger.info(f"Downloaded {downloaded}/{total_size} bytes ({percent:.1f}%)")
+        def download_with_variants(url, out_path, name):
+            variants = generate_url_variants(url)
+            
+            for i, variant_url in enumerate(variants, 1):
+                logger.info(f"Attempting variant {i}/{len(variants)} for {name}")
+                logger.info(f"  URL: {variant_url}")
                 
-                logger.info(f"{name} successfully downloaded to {out_path} ({downloaded} bytes)")
-                return True
-                
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 400:
-                    logger.error(f"400 Bad Request - URL may be malformed or expired: {processed_url}")
-                    logger.error(f"Response headers: {dict(e.response.headers)}")
-                    logger.error(f"Response content: {e.response.text[:1000]}")
+                try:
+                    resp = session.get(variant_url, headers=headers, stream=True, timeout=120)
+                    resp.raise_for_status()
                     
-                    # Additional debug info
-                    logger.error("DEBUG INFO:")
-                    logger.error(f"- Original URL: {url}")
-                    logger.error(f"- Processed URL: {processed_url}")
-                    logger.error(f"- Contains _ENC: {'_ENC(' in url}")
-                raise
-            except Exception as e:
-                logger.error(f"Download failed for {name}: {str(e)}")
-                raise
+                    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+                    total_size = int(resp.headers.get('content-length', 0))
+                    downloaded = 0
+                    
+                    with open(out_path, "wb") as f:
+                        for chunk in resp.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
+                                downloaded += len(chunk)
+                    
+                    logger.info(f"SUCCESS: {name} downloaded ({downloaded} bytes) using variant {i}")
+                    logger.info(f"SUCCESS: Working URL was: {variant_url}")
+                    return True
+                    
+                except requests.exceptions.HTTPError as e:
+                    if e.response.status_code == 400:
+                        logger.warning(f"Variant {i} failed with 400 Bad Request")
+                        logger.warning(f"  Response: {e.response.text[:200]}")
+                        continue
+                    else:
+                        logger.error(f"Variant {i} failed with HTTP {e.response.status_code}")
+                        raise
+                except Exception as e:
+                    logger.warning(f"Variant {i} failed: {str(e)}")
+                    continue
+            
+            raise ValueError(f"All {len(variants)} variants failed for {name}")
         
         os.makedirs(os.path.dirname(args.model_weights) or ".", exist_ok=True)
         if args.pickle_cdn_url:
             os.makedirs(os.path.dirname(args.pickle_file) or ".", exist_ok=True)
+        
         try:
-            download_file(args.weights_cdn_url, args.model_weights, "weights")
+            download_with_variants(args.weights_cdn_url, args.model_weights, "weights")
             
             if args.pickle_cdn_url:
-                download_file(args.pickle_cdn_url, args.pickle_file, "pickle file")
+                download_with_variants(args.pickle_cdn_url, args.pickle_file, "pickle file")
             else:
                 with open(args.pickle_file, 'wb') as f:
                     pass
                 logger.info(f"Created empty pickle file at {args.pickle_file}")
                 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to download file after retries: {e}")
-            raise
         except Exception as e:
-            logger.error(f"Unexpected error: {e}")
+            logger.error(f"Download failed: {e}")
             raise
     args:
       - --weights_cdn_url
