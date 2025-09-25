@@ -1,5 +1,5 @@
 name: Load Weights from CDN
-description: Downloads model weights from a CDN URL with retry logic and makes them available for inference.
+description: Downloads model weights from a CDN URL.
 inputs:
   - name: weights_cdn_url
     type: string
@@ -38,6 +38,9 @@ implementation:
         parser.add_argument('--pickle_file', type=str, required=True, help='Path to save pickle file')
         args = parser.parse_args()
         
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger("cdn_retry")
+        
         headers = {}
         if args.access_token and os.path.exists(args.access_token):
             with open(args.access_token, 'r') as f:
@@ -50,9 +53,6 @@ implementation:
                     headers = {}  # Force no auth
                 else:
                     headers["Authorization"] = auth_header
-        
-        logging.basicConfig(level=logging.INFO)
-        logger = logging.getLogger("cdn_retry")
         
         session = requests.Session()
         retries = Retry(
