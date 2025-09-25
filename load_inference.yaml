@@ -1,251 +1,76 @@
-name: Load Weights from CDN
-description: Downloads model weights from a CDN URL with retry logic and makes them available for inference.
+name: Download Data and Model Weights
+description: Downloads a dataset and model weights from specified public URLs.
 inputs:
-  - name: weights_cdn_url
-    type: string
-    description: "CDN URL to download model weights (.pth/.pt/.pkl)"
-  - name: access_token
-    type: string
-    description: "Optional Bearer access token file for CDN auth"
-  - name: pickle_cdn_url
-    type: string
-    description: "CDN URL to download supplementary pickle file"
+  - name: data_url
+    type: String
+    description: URL to fetch the dataset from (e.g., a pickle, CSV, etc.).
+  - name: model_weights_url
+    type: String
+    description: URL to fetch the model weights file from (e.g., .h5, .pt, .bin).
 outputs:
-  - name: model_weights
-    type: Model
-    description: "Downloaded model weights for inference"
-  - name: pickle_file
+  - name: data_out
     type: Dataset
-    description: "Downloaded pickle file"
+    description: The downloaded dataset artifact.
+  - name: model_weights_out
+    type: Model
+    description: The downloaded model weights artifact.
 implementation:
   container:
-    image: gurpreetgandhi/nesy-factory:v12
+    image: python:3.9
     command:
+      - sh
+      - -c
+      - |
+        set -e
+        python3 -m pip install --quiet requests
+
+        exec "$0" "$@"
       - python3
       - -u
       - -c
       - |
-        import argparse, os, requests, logging, base64, re, time
-        from requests.adapters import HTTPAdapter
-        from urllib3.util.retry import Retry
-        from urllib.parse import unquote
-        
-        parser = argparse.ArgumentParser()
-        parser.add_argument('--weights_cdn_url', type=str, required=True, help='CDN URL of weights file')
-        parser.add_argument('--access_token', type=str, required=False, help='Path to access token file')
-        parser.add_argument('--pickle_cdn_url', type=str, required=False, help='CDN URL of pickle file')
-        parser.add_argument('--model_weights', type=str, required=True, help='Path to save model weights')
-        parser.add_argument('--pickle_file', type=str, required=True, help='Path to save pickle file')
+        import argparse
+        import os
+        import requests
+
+        parser = argparse.ArgumentParser(description="Download data and model weights from URLs.")
+        parser.add_argument('--data_url', type=str, required=True, help='URL for the dataset.')
+        parser.add_argument('--data_out', type=str, required=True, help='Output path for the dataset.')
+        parser.add_argument('--model_weights_url', type=str, required=True, help='URL for the model weights.')
+        parser.add_argument('--model_weights_out', type=str, required=True, help='Output path for the model weights.')
         args = parser.parse_args()
-        
-        logging.basicConfig(level=logging.INFO)
-        logger = logging.getLogger("cdn_retry")
-        
-        headers = {}
-        if args.access_token and os.path.exists(args.access_token):
-            with open(args.access_token, 'r') as f:
-                token = f.read().strip()
-                # Check if token is too large (nginx typically limits headers to 8KB)
-                auth_header = f"Bearer {token}"
-                logger.info(f"Auth token size: {len(auth_header)} bytes")
-                if len(auth_header) > 4000:  # More aggressive limit
-                    logger.warning(f"Auth token too large ({len(auth_header)} bytes), skipping auth entirely")
-                    headers = {}  # Force no auth
-                else:
-                    headers["Authorization"] = auth_header
-        
-        session = requests.Session()
-        retries = Retry(
-            total=5,  # Increased retries
-            backoff_factor=3,  # Longer delays between retries
-            status_forcelist=[429, 500, 502, 503, 504],  # Added 429
-            allowed_methods=["GET"]
-        )
-        adapter = HTTPAdapter(max_retries=retries)
-        session.mount("http://", adapter)
-        session.mount("https://", adapter)
-        
-        def generate_url_variants(url):
-            decoded_url = unquote(url)
-            logger.info(f"Decoded original URL: {decoded_url}")
-            
-            variants = []
-            
-            if '_ENC(' in decoded_url:
-                logger.warning(f"URL contains _ENC() wrapper")
-                enc_match = re.search(r'_ENC\(([^)]+)\)', decoded_url)
-                if enc_match:
-                    encrypted_part = enc_match.group(1)
-                    logger.info(f"Encrypted part: {encrypted_part}")
-                    
-                    try:
-                        # Try multiple base64 decoding strategies
-                        for padding in ['', '=', '==', '===']:
-                            try:
-                                padded_data = encrypted_part + padding
-                                decoded_bytes = base64.b64decode(padded_data, validate=True)
-                                try:
-                                    decrypted_path = decoded_bytes.decode('utf-8')
-                                    logger.info(f"UTF-8 decryption succeeded: {decrypted_path}")
-                                    decrypted_url = decoded_url.replace(f"_ENC({encrypted_part})", decrypted_path)
-                                    variants.append(decrypted_url)
-                                    break
-                                except UnicodeDecodeError:
-                                    # Try latin-1 as fallback
-                                    try:
-                                        decrypted_path = decoded_bytes.decode('latin-1')
-                                        logger.info(f"Latin-1 decryption succeeded: {decrypted_path}")
-                                        decrypted_url = decoded_url.replace(f"_ENC({encrypted_part})", decrypted_path)
-                                        variants.append(decrypted_url)
-                                        break
-                                    except UnicodeDecodeError:
-                                        continue
-                            except Exception:
-                                continue
-                        
-                        # Try URL-safe base64 as fallback
-                        if not variants:
-                            try:
-                                decoded_bytes = base64.urlsafe_b64decode(encrypted_part + '==')
-                                decrypted_path = decoded_bytes.decode('utf-8', errors='ignore')
-                                logger.info(f"URL-safe base64 decryption succeeded: {decrypted_path}")
-                                decrypted_url = decoded_url.replace(f"_ENC({encrypted_part})", decrypted_path)
-                                variants.append(decrypted_url)
-                            except Exception:
-                                pass
-                    except Exception as e:
-                        logger.error(f"Failed to decrypt _ENC() wrapper: {e}")
-                
-                logger.error("Attempting to remove _ENC() wrapper entirely...")
-                
-                base_url = re.sub(r'/_ENC\([^)]+\)', '', decoded_url)
-                logger.info(f"Base URL after removing _ENC: {base_url}")
-                
-                # Generate more diverse URL variants
-                url_patterns = [
-                    base_url,  # Original base
-                    # Handle _$$_ patterns
-                    base_url.replace('_$$_', '_'),  # _$$_ -> _
-                    base_url.replace('_$$_', '__'),  # _$$_ -> __
-                    base_url.replace('_$$_', ''),   # _$$_ -> (empty)
-                    base_url.replace('_$$_', '_V1_'),  # _$$_ -> _V1_
-                    base_url.replace('_$$_', 'V1'),    # _$$_ -> V1
-                    base_url.replace('_$$_', '-'),     # _$$_ -> -
-                    # Handle _$_ patterns (single $)
-                    base_url.replace('_$_', '_'),   # _$_ -> _
-                    base_url.replace('_$_', '__'),  # _$_ -> __
-                    base_url.replace('_$_', ''),    # _$_ -> (empty)
-                    base_url.replace('_$_', '_V1_'), # _$_ -> _V1_
-                    base_url.replace('_$_', 'V1'),   # _$_ -> V1
-                    base_url.replace('_$_', '-'),    # _$_ -> -
-                    # Handle $$ patterns
-                    base_url.replace('$$', ''),        # $$ -> (empty)
-                    base_url.replace('$$', '_'),       # $$ -> _
-                    base_url.replace('$$', 'V1'),      # $$ -> V1
-                    # Handle single $ patterns
-                    base_url.replace('$', ''),         # $ -> (empty)
-                    base_url.replace('$', '_'),        # $ -> _
-                    # Handle URL encoded patterns
-                    base_url.replace('%24%24', ''),    # URL encoded $$ -> (empty)
-                    base_url.replace('%24%24', '_'),   # URL encoded $$ -> _
-                    base_url.replace('%24', ''),       # URL encoded $ -> (empty)
-                    base_url.replace('%24', '_'),      # URL encoded $ -> _
-                ]
-                variants.extend(url_patterns)
-            else:
-                variants.append(decoded_url)
-            
-            unique_variants = []
-            for v in variants:
-                if v not in unique_variants:
-                    unique_variants.append(v)
-            
-            logger.info(f"Generated {len(unique_variants)} unique URL variants:")
-            for i, variant in enumerate(unique_variants, 1):
-                logger.info(f"  {i}. {variant}")
-            
-            return unique_variants
-        
-        def download_with_variants(url, out_path, name):
-            variants = generate_url_variants(url)
-            logger.info(f"Will try {len(variants)} URL variants for {name}")
-            
-            # Always try without auth first due to header size issues
-            headers_to_try = [{}, headers] if headers else [{}]
-            
-            for header_idx, header_set in enumerate(headers_to_try):
-                auth_status = "with auth" if header_set else "without auth"
-                logger.info(f"=== Trying {name} download {auth_status} ===")
-                
-                for i, variant_url in enumerate(variants, 1):
-                    logger.info(f"Attempting variant {i}/{len(variants)} for {name} ({auth_status})")
-                    logger.info(f"  URL: {variant_url}")
-                    
-                    try:
-                        # Add delay between requests to avoid overwhelming server
-                        if i > 1:  # Don't delay the first request
-                            time.sleep(2)
-                        
-                        resp = session.get(variant_url, headers=header_set, stream=True, timeout=120)
-                        resp.raise_for_status()
-                        
-                        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-                        total_size = int(resp.headers.get('content-length', 0))
-                        downloaded = 0
-                        
-                        with open(out_path, "wb") as f:
-                            for chunk in resp.iter_content(chunk_size=8192):
-                                if chunk:
-                                    f.write(chunk)
-                                    downloaded += len(chunk)
-                        
-                        logger.info(f"SUCCESS: {name} downloaded ({downloaded} bytes) using variant {i} {auth_status}")
-                        logger.info(f"SUCCESS: Working URL was: {variant_url}")
-                        return True
-                        
-                    except requests.exceptions.HTTPError as e:
-                        if e.response.status_code == 400:
-                            logger.warning(f"Variant {i} failed with 400 Bad Request ({auth_status})")
-                            if "Header Or Cookie Too Large" in e.response.text:
-                                logger.warning("  Reason: Header too large - will try next auth method")
-                                break  # Try next auth method
-                            else:
-                                logger.warning(f"  Response: {e.response.text[:200]}")
-                                continue  # Try next variant
-                        else:
-                            logger.warning(f"Variant {i} failed with HTTP {e.response.status_code}: {str(e)}")
-                            continue
-                    except Exception as e:
-                        logger.warning(f"Variant {i} failed: {str(e)}")
-                        continue
-            
-            raise ValueError(f"All variants failed for {name} - tried {len(variants)} URLs with/without auth")
-        
-        os.makedirs(os.path.dirname(args.model_weights) or ".", exist_ok=True)
-        if args.pickle_cdn_url:
-            os.makedirs(os.path.dirname(args.pickle_file) or ".", exist_ok=True)
-        
-        try:
-            download_with_variants(args.weights_cdn_url, args.model_weights, "weights")
-            
-            if args.pickle_cdn_url:
-                download_with_variants(args.pickle_cdn_url, args.pickle_file, "pickle file")
-            else:
-                with open(args.pickle_file, 'wb') as f:
-                    pass
-                logger.info(f"Created empty pickle file at {args.pickle_file}")
-                
-        except Exception as e:
-            logger.error(f"Download failed: {e}")
-            raise
+
+        # It's good practice to handle potential templating issues if URLs contain special characters
+        args.data_url = args.data_url.replace("$$", "$$$")
+        args.model_weights_url = args.model_weights_url.replace("$$", "$$$")
+
+        #  Step 1: Download dataset from URL 
+        print(f"Fetching dataset from: {args.data_url}")
+        resp_data = requests.get(args.data_url)
+        resp_data.raise_for_status()
+
+        os.makedirs(os.path.dirname(args.data_out), exist_ok=True)
+        with open(args.data_out, "wb") as f:
+            f.write(resp_data.content)
+        print(f"Dataset saved successfully to {args.data_out}")
+
+        #  Step 2: Download model weights from URL 
+        print(f"Fetching model weights from: {args.model_weights_url}")
+        resp_weights = requests.get(args.model_weights_url)
+        resp_weights.raise_for_status()
+
+        os.makedirs(os.path.dirname(args.model_weights_out), exist_ok=True)
+        # Always write weights in binary mode for broader compatibility (e.g., h5, pt files)
+        with open(args.model_weights_out, "wb") as f:
+            f.write(resp_weights.content)
+        print(f"Model weights saved successfully to {args.model_weights_out}")
+
     args:
-      - --weights_cdn_url
-      - inputValue: weights_cdn_url
-      - --access_token
-      - inputPath: access_token
-      - --pickle_cdn_url
-      - inputValue: pickle_cdn_url
-      - --model_weights
-      - outputPath: model_weights
-      - --pickle_file
-      - outputPath: pickle_file
+      - --data_url
+      - { inputValue: data_url }
+      - --data_out
+      - { outputPath: data_out }
+      - --model_weights_url
+      - { inputValue: model_weights_url }
+      - --model_weights_out
+      - { outputPath: model_weights_out }
