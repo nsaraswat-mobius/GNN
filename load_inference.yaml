@@ -1,5 +1,5 @@
 name: Load Weights from CDN
-description: Downloads model weights from a CDN URL with retry logic and makes them available for inference.
+description: Downloads model weights from a CDN URL.
 inputs:
   - name: weights_cdn_url
     type: string
@@ -72,13 +72,44 @@ implementation:
                     logger.info(f"Encrypted part: {encrypted_part}")
                     
                     try:
-                        decoded_bytes = base64.b64decode(encrypted_part + '==')
-                        decrypted_path = decoded_bytes.decode('utf-8')
-                        logger.info(f"Base64 decryption succeeded: {decrypted_path}")
-                        decrypted_url = decoded_url.replace(f"_ENC({encrypted_part})", decrypted_path)
-                        variants.append(decrypted_url)
+                        # Try multiple base64 decoding strategies
+                        for padding in ['', '=', '==', '===']:
+                            try:
+                                padded_data = encrypted_part + padding
+                                decoded_bytes = base64.b64decode(padded_data, validate=True)
+                                try:
+                                    decrypted_path = decoded_bytes.decode('utf-8')
+                                    logger.info(f"UTF-8 decryption succeeded: {decrypted_path}")
+                                    decrypted_url = decoded_url.replace(f"_ENC({encrypted_part})", decrypted_path)
+                                    variants.append(decrypted_url)
+                                    break
+                                except UnicodeDecodeError:
+                                    # Try latin-1 as fallback
+                                    try:
+                                        decrypted_path = decoded_bytes.decode('latin-1')
+                                        logger.info(f"Latin-1 decryption succeeded: {decrypted_path}")
+                                        decrypted_url = decoded_url.replace(f"_ENC({encrypted_part})", decrypted_path)
+                                        variants.append(decrypted_url)
+                                        break
+                                    except UnicodeDecodeError:
+                                        continue
+                            except Exception:
+                                continue
+                        
+                        # Try URL-safe base64 as fallback
+                        if not variants:
+                            try:
+                                decoded_bytes = base64.urlsafe_b64decode(encrypted_part + '==')
+                                decrypted_path = decoded_bytes.decode('utf-8', errors='ignore')
+                                logger.info(f"URL-safe base64 decryption succeeded: {decrypted_path}")
+                                decrypted_url = decoded_url.replace(f"_ENC({encrypted_part})", decrypted_path)
+                                variants.append(decrypted_url)
+                            except Exception:
+                                pass
                     except Exception as e:
-                        logger.warning(f"Base64 decryption failed: {e}")
+                        logger.error(f"Failed to decrypt _ENC() wrapper: {e}")
+                
+                logger.error("Attempting to remove _ENC() wrapper entirely...")
                 
                 base_url = re.sub(r'/_ENC\([^)]+\)', '', decoded_url)
                 logger.info(f"Base URL after removing _ENC: {base_url}")
@@ -89,6 +120,9 @@ implementation:
                     base_url.replace('$$', ''),
                     base_url.replace('_$$_', '__'),
                     base_url.replace('_$$_', 'V1'),
+                    base_url.replace('%24%24', '$$'),
+                    base_url.replace('_$$_', '_V1_'),
+                    base_url.replace('$$', '_V1_'),
                 ])
             else:
                 variants.append(decoded_url)
