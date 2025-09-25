@@ -40,12 +40,6 @@ implementation:
         parser.add_argument('--pickle_file', type=str, required=True, help='Path to save pickle file')
         args = parser.parse_args()
 
-        # Escape $$ to $$$ so Kubernetes won’t collapse it
-        if args.weights_cdn_url:
-            args.weights_cdn_url = args.weights_cdn_url.replace("$$", "$$$")
-        if args.pickle_cdn_url:
-            args.pickle_cdn_url = args.pickle_cdn_url.replace("$$", "$$$")
-
         # Load token if provided
         headers = {}
         if args.access_token and os.path.exists(args.access_token):
