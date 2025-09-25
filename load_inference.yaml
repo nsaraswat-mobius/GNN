@@ -31,7 +31,7 @@ implementation:
         import argparse, os, requests, logging
         from requests.adapters import HTTPAdapter
         from urllib3.util.retry import Retry
-        
+
         parser = argparse.ArgumentParser()
         parser.add_argument('--weights_cdn_url', type=str, required=True, help='CDN URL of weights file')
         parser.add_argument('--access_token', type=str, required=False, help='Path to access token file')
@@ -39,18 +39,24 @@ implementation:
         parser.add_argument('--model_weights', type=str, required=True, help='Path to save model weights')
         parser.add_argument('--pickle_file', type=str, required=True, help='Path to save pickle file')
         args = parser.parse_args()
-        
+
+        # Escape $$ to $$$ so Kubernetes won’t collapse it
+        if args.weights_cdn_url:
+            args.weights_cdn_url = args.weights_cdn_url.replace("$$", "$$$")
+        if args.pickle_cdn_url:
+            args.pickle_cdn_url = args.pickle_cdn_url.replace("$$", "$$$")
+
         # Load token if provided
         headers = {}
         if args.access_token and os.path.exists(args.access_token):
             with open(args.access_token, 'r') as f:
                 token = f.read().strip()
                 headers["Authorization"] = f"Bearer {token}"
-        
+
         # Setup retry logger
         logging.basicConfig(level=logging.INFO)
         logger = logging.getLogger("cdn_retry")
-        
+
         # Setup session with retries
         session = requests.Session()
         retries = Retry(
@@ -62,7 +68,7 @@ implementation:
         adapter = HTTPAdapter(max_retries=retries)
         session.mount("http://", adapter)
         session.mount("https://", adapter)
-        
+
         def download_file(url, out_path, name):
             logger.info(f" Downloading {name} with retry + timeout")
             resp = session.get(url, headers=headers, stream=True, timeout=60)
@@ -73,7 +79,7 @@ implementation:
                     if chunk:
                         f.write(chunk)
             logger.info(f" {name} successfully downloaded to {out_path}")
-        
+
         try:
             download_file(args.weights_cdn_url, args.model_weights, "weights")
             if args.pickle_cdn_url:
