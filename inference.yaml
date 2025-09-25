@@ -2,9 +2,6 @@ name: Inference and Anomaly Detection
 description: Runs inference on a query data point and detects anomalies using the trained model and dataset.
 
 inputs:
-  - name: query
-    type: string
-    description: "Query input for inference"
   - name: dataset
     type: Dataset
     description: "Full dataset including test/validation splits"
@@ -22,7 +19,7 @@ outputs:
 
 implementation:
   container:
-    image: gurpreetgandhi/nesy-factory:v12
+    image: gurpreetgandhi/nesy-factory:v13
     command:
       - sh
       - -c
@@ -35,32 +32,38 @@ implementation:
       - -c
       - |
         import argparse, os, torch, json
-        from nesy_factory.utils.data_utils import DataWrapper
-        from nesy_factory.utils.config_utils import get_config_by_name
-        from nesy_factory.GNNs.model_factory import create_model
+        from nesy_factory.utils.utils import *
+        from nesy_factory.GNNs import create_model
         
         parser = argparse.ArgumentParser()
-        parser.add_argument('--query', type=str, required=True, help='Query input for inference')
         parser.add_argument('--dataset', type=str, required=True, help='Path to dataset directory')
         parser.add_argument('--model_weights', type=str, required=True, help='Path to trained model weights')
         parser.add_argument('--config_json', type=str, required=False, help='Additional config JSON string')
         parser.add_argument('--inference_result', type=str, required=True, help='Path to save inference result JSON')
         args = parser.parse_args()
         
-        # Load configs and merge
-        config = get_config_by_name('basic_stgnn', 'configs/stgnn_configs.yaml')
+        # Load data
+        try:
+            with open(args.dataset, "rb") as f:
+                data = pickle.load(f)
+            print(f"Successfully loaded data. Type: {type(data)}")
+            if hasattr(data, 'x'):
+                print(f"Data shape: {data.x.shape}")
+        except Exception as e:
+            print(f"Error loading data: {e}")
+            exit(1)
+
+        # Load config
         if args.config_json:
-            config.update(json.loads(args.config_json))
+            config=json.loads(args.config_json)
         
-        # Load dataset using DataWrapper
-        data = DataWrapper(args.dataset, config)
         print(f"Loaded Config: {config}")
         
         # Load model using config and factory method
         print(f"Creating STGNN model from config")
         model = create_model('stgnn', config)
         model.load_state_dict(torch.load(args.model_weights, map_location="cpu"))
-        
+        model.eval()
         print("Model created successfully.")
         print(model.get_model_info())
         
@@ -96,8 +99,6 @@ implementation:
         print(f"Inference completed. Results saved.")
 
     args:
-      - --query
-      - inputValue: query
       - --dataset
       - inputPath: dataset
       - --model_weights
