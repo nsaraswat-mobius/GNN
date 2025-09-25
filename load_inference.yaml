@@ -24,12 +24,6 @@ implementation:
   container:
     image: gurpreetgandhi/nesy-factory:v12
     command:
-      - sh
-      - -c
-      - |
-        python3 -m pip install || \
-        python3 -m pip install --user
-        exec "$0" "$@"
       - python3
       - -u
       - -c
