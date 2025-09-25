@@ -1,7 +1,7 @@
 name: Load JSON dataset with anomaly detection
 description: Fetches JSON from API and prepares train/test/anomaly datasets with float-only features.
 inputs:
-  - {name: api_url, type: String, description: 'API URL to fetch JSON dataset'}
+  - {name: schema_id, type: String, description: 'Schema ID used to construct API URL'}
   - {name: access_token, type: string, description: 'Bearer access token for API auth'}
 outputs:
   - {name: train_data, type: Dataset}
@@ -33,7 +33,7 @@ implementation:
         import logging
 
         parser = argparse.ArgumentParser()
-        parser.add_argument('--api_url', type=str, required=True, help='API URL to fetch JSON dataset')
+        parser.add_argument('--schema_id', type=str, required=True, help='Schema ID for constructing API URL')
         parser.add_argument('--access_token', type=str, required=True, help='Bearer token for API')
         parser.add_argument('--train_data', type=str, required=True, help='Path to output train dataset')
         parser.add_argument('--test_data', type=str, required=True, help='Path to output test dataset')
@@ -50,14 +50,17 @@ implementation:
         # Setup session with retry logic
         session = requests.Session()
         retries = Retry(
-            total=5,                # total retries
-            backoff_factor=1,       # wait 1s, 2s, 4s
+            total=5,
+            backoff_factor=1,
             status_forcelist=[500, 502, 503, 504],
             allowed_methods=["POST"]
         )
         adapter = HTTPAdapter(max_retries=retries)
         session.mount("http://", adapter)
         session.mount("https://", adapter)
+
+        # Construct API URL from schema_id
+        api_url = f"https://igs.gov-cloud.ai/pi-entity-instances-0service/v2.0/schemas/{args.schema_id}/instances/list?page=0&size=2000&showDBaaSReservedKeywords=true"
 
         # Fetch dataset from API with retry + timeout
         headers = {
@@ -77,7 +80,7 @@ implementation:
 
         try:
             logger.info(" Sending request to API with retries enabled")
-            resp = session.post(args.api_url, headers=headers, json=payload, timeout=30)
+            resp = session.post(api_url, headers=headers, json=payload, timeout=30)
             resp.raise_for_status()
             raw_data = resp.json()
         except requests.exceptions.RequestException as e:
@@ -125,8 +128,8 @@ implementation:
             pickle.dump(test_labels, f)
             
     args:
-      - --api_url
-      - {inputValue: api_url}
+      - --schema_id
+      - {inputValue: schema_id}
       - --access_token
       - {inputPath: access_token}
       - --train_data
