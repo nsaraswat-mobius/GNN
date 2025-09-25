@@ -94,8 +94,21 @@ implementation:
                         # Last resort: try removing the entire _ENC() wrapper
                         # This might work if the CDN also accepts direct paths
                         fallback_url = re.sub(r'/_ENC\([^)]+\)', '', decoded_url)
-                        logger.info(f"Fallback URL without _ENC(): {fallback_url}")
-                        return fallback_url
+                        
+                        # Also try different $ handling approaches
+                        url_variants = [
+                            fallback_url,  # Keep $
+                            fallback_url.replace('_$_', '_'),  # Replace _$_ with _
+                            fallback_url.replace('$', ''),     # Remove $ entirely
+                            fallback_url.replace('_$_', '__'), # Replace _$_ with __
+                        ]
+                        
+                        logger.info(f"Trying {len(url_variants)} URL variants:")
+                        for i, variant in enumerate(url_variants):
+                            logger.info(f"  Variant {i+1}: {variant}")
+                        
+                        # For now, return the first variant (we can enhance this to try multiple)
+                        return url_variants[0]
                 else:
                     logger.error("Could not extract encrypted part from _ENC() wrapper")
                     return decoded_url
