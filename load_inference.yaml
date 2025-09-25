@@ -66,7 +66,39 @@ implementation:
             decoded_url = unquote(url)
             if '_ENC(' in decoded_url:
                 logger.warning(f"URL contains _ENC() wrapper: {decoded_url}")
-                return decoded_url
+                # Extract the encrypted part
+                import re
+                enc_match = re.search(r'_ENC\(([^)]+)\)', decoded_url)
+                if enc_match:
+                    encrypted_part = enc_match.group(1)
+                    logger.info(f"Encrypted part: {encrypted_part}")
+                    
+                    # TODO: Implement proper decryption logic here
+                    # This is a placeholder - you need the actual decryption method
+                    try:
+                        # Try base64 decode as a first attempt
+                        import base64
+                        decoded_bytes = base64.b64decode(encrypted_part + '==')  # Add padding
+                        decrypted_path = decoded_bytes.decode('utf-8')
+                        logger.info(f"Attempted decryption: {decrypted_path}")
+                        
+                        # Replace the _ENC() wrapper with the decrypted path
+                        final_url = decoded_url.replace(f"_ENC({encrypted_part})", decrypted_path)
+                        logger.info(f"Final decoded URL: {final_url}")
+                        return final_url
+                        
+                    except Exception as e:
+                        logger.error(f"Failed to decrypt _ENC() wrapper: {e}")
+                        logger.error("Attempting to remove _ENC() wrapper entirely...")
+                        
+                        # Last resort: try removing the entire _ENC() wrapper
+                        # This might work if the CDN also accepts direct paths
+                        fallback_url = re.sub(r'/_ENC\([^)]+\)', '', decoded_url)
+                        logger.info(f"Fallback URL without _ENC(): {fallback_url}")
+                        return fallback_url
+                else:
+                    logger.error("Could not extract encrypted part from _ENC() wrapper")
+                    return decoded_url
             return decoded_url
         
         def download_file(url, out_path, name):
@@ -97,7 +129,14 @@ implementation:
             except requests.exceptions.HTTPError as e:
                 if e.response.status_code == 400:
                     logger.error(f"400 Bad Request - URL may be malformed or expired: {processed_url}")
-                    logger.error(f"Response content: {e.response.text[:500]}")
+                    logger.error(f"Response headers: {dict(e.response.headers)}")
+                    logger.error(f"Response content: {e.response.text[:1000]}")
+                    
+                    # Additional debug info
+                    logger.error("DEBUG INFO:")
+                    logger.error(f"- Original URL: {url}")
+                    logger.error(f"- Processed URL: {processed_url}")
+                    logger.error(f"- Contains _ENC: {'_ENC(' in url}")
                 raise
             except Exception as e:
                 logger.error(f"Download failed for {name}: {str(e)}")
