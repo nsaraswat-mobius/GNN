@@ -42,7 +42,12 @@ implementation:
         if args.access_token and os.path.exists(args.access_token):
             with open(args.access_token, 'r') as f:
                 token = f.read().strip()
-                headers["Authorization"] = f"Bearer {token}"
+                # Check if token is too large (nginx typically limits headers to 8KB)
+                auth_header = f"Bearer {token}"
+                if len(auth_header) > 7000:  # Leave some buffer
+                    logger.warning(f"Auth token too large ({len(auth_header)} bytes), trying without auth")
+                else:
+                    headers["Authorization"] = auth_header
         
         logging.basicConfig(level=logging.INFO)
         logger = logging.getLogger("cdn_retry")
@@ -119,10 +124,14 @@ implementation:
                     base_url.replace('_$$_', '_'),
                     base_url.replace('$$', ''),
                     base_url.replace('_$$_', '__'),
-                    base_url.replace('_$$_', 'V1'),
-                    base_url.replace('%24%24', '$$'),
                     base_url.replace('_$$_', '_V1_'),
                     base_url.replace('$$', '_V1_'),
+                    base_url.replace('%24%24', '$$'),
+                    base_url.replace('_$$_', '-'),
+                    base_url.replace('$$', '-'),
+                    base_url.replace('_$$_', ''),
+                    re.sub(r'[_$]+', '_', base_url),
+                    re.sub(r'[_$]+', '', base_url),
                 ])
             else:
                 variants.append(decoded_url)
@@ -141,39 +150,51 @@ implementation:
         def download_with_variants(url, out_path, name):
             variants = generate_url_variants(url)
             
-            for i, variant_url in enumerate(variants, 1):
-                logger.info(f"Attempting variant {i}/{len(variants)} for {name}")
-                logger.info(f"  URL: {variant_url}")
+            # Try with auth headers first, then without if they're too large
+            headers_to_try = [headers]
+            if headers and "Authorization" in headers:
+                headers_to_try.append({})  # Try without auth as fallback
+            
+            for header_set in headers_to_try:
+                auth_status = "with auth" if header_set else "without auth"
+                logger.info(f"Trying {name} download {auth_status}")
                 
-                try:
-                    resp = session.get(variant_url, headers=headers, stream=True, timeout=120)
-                    resp.raise_for_status()
+                for i, variant_url in enumerate(variants, 1):
+                    logger.info(f"Attempting variant {i}/{len(variants)} for {name} {auth_status}")
+                    logger.info(f"  URL: {variant_url}")
                     
-                    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-                    total_size = int(resp.headers.get('content-length', 0))
-                    downloaded = 0
-                    
-                    with open(out_path, "wb") as f:
-                        for chunk in resp.iter_content(chunk_size=8192):
-                            if chunk:
-                                f.write(chunk)
-                                downloaded += len(chunk)
-                    
-                    logger.info(f"SUCCESS: {name} downloaded ({downloaded} bytes) using variant {i}")
-                    logger.info(f"SUCCESS: Working URL was: {variant_url}")
-                    return True
-                    
-                except requests.exceptions.HTTPError as e:
-                    if e.response.status_code == 400:
-                        logger.warning(f"Variant {i} failed with 400 Bad Request")
-                        logger.warning(f"  Response: {e.response.text[:200]}")
+                    try:
+                        resp = session.get(variant_url, headers=header_set, stream=True, timeout=120)
+                        resp.raise_for_status()
+                        
+                        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+                        total_size = int(resp.headers.get('content-length', 0))
+                        downloaded = 0
+                        
+                        with open(out_path, "wb") as f:
+                            for chunk in resp.iter_content(chunk_size=8192):
+                                if chunk:
+                                    f.write(chunk)
+                                    downloaded += len(chunk)
+                        
+                        logger.info(f"SUCCESS: {name} downloaded ({downloaded} bytes) using variant {i} {auth_status}")
+                        logger.info(f"SUCCESS: Working URL was: {variant_url}")
+                        return True
+                        
+                    except requests.exceptions.HTTPError as e:
+                        if e.response.status_code == 400 and "Header Or Cookie Too Large" in e.response.text:
+                            logger.warning(f"Variant {i} failed with 400 - Header too large, will try without auth")
+                            break  # Try next header set (without auth)
+                        elif e.response.status_code == 400:
+                            logger.warning(f"Variant {i} failed with 400 Bad Request")
+                            logger.warning(f"  Response: {e.response.text[:200]}")
+                            continue
+                        else:
+                            logger.error(f"Variant {i} failed with HTTP {e.response.status_code}")
+                            continue
+                    except Exception as e:
+                        logger.warning(f"Variant {i} failed: {str(e)}")
                         continue
-                    else:
-                        logger.error(f"Variant {i} failed with HTTP {e.response.status_code}")
-                        raise
-                except Exception as e:
-                    logger.warning(f"Variant {i} failed: {str(e)}")
-                    continue
             
             raise ValueError(f"All {len(variants)} variants failed for {name}")
         
