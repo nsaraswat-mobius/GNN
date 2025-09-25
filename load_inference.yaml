@@ -1,5 +1,5 @@
 name: Load Weights from CDN
-description: Downloads model weights from a CDN URL.
+description: Downloads model weights from a CDN URL with retry logic and makes them available for inference.
 inputs:
   - name: weights_cdn_url
     type: string
@@ -25,7 +25,7 @@ implementation:
       - -u
       - -c
       - |
-        import argparse, os, requests, logging, base64, re
+        import argparse, os, requests, logging, base64, re, time
         from requests.adapters import HTTPAdapter
         from urllib3.util.retry import Retry
         from urllib.parse import unquote
@@ -56,9 +56,9 @@ implementation:
         
         session = requests.Session()
         retries = Retry(
-            total=3,
-            backoff_factor=2,
-            status_forcelist=[500, 502, 503, 504],
+            total=5,  # Increased retries
+            backoff_factor=3,  # Longer delays between retries
+            status_forcelist=[429, 500, 502, 503, 504],  # Added 429
             allowed_methods=["GET"]
         )
         adapter = HTTPAdapter(max_retries=retries)
@@ -124,17 +124,32 @@ implementation:
                 # Generate more diverse URL variants
                 url_patterns = [
                     base_url,  # Original base
+                    # Handle _$$_ patterns
                     base_url.replace('_$$_', '_'),  # _$$_ -> _
                     base_url.replace('_$$_', '__'),  # _$$_ -> __
                     base_url.replace('_$$_', ''),   # _$$_ -> (empty)
                     base_url.replace('_$$_', '_V1_'),  # _$$_ -> _V1_
                     base_url.replace('_$$_', 'V1'),    # _$$_ -> V1
                     base_url.replace('_$$_', '-'),     # _$$_ -> -
+                    # Handle _$_ patterns (single $)
+                    base_url.replace('_$_', '_'),   # _$_ -> _
+                    base_url.replace('_$_', '__'),  # _$_ -> __
+                    base_url.replace('_$_', ''),    # _$_ -> (empty)
+                    base_url.replace('_$_', '_V1_'), # _$_ -> _V1_
+                    base_url.replace('_$_', 'V1'),   # _$_ -> V1
+                    base_url.replace('_$_', '-'),    # _$_ -> -
+                    # Handle $$ patterns
                     base_url.replace('$$', ''),        # $$ -> (empty)
                     base_url.replace('$$', '_'),       # $$ -> _
                     base_url.replace('$$', 'V1'),      # $$ -> V1
+                    # Handle single $ patterns
+                    base_url.replace('$', ''),         # $ -> (empty)
+                    base_url.replace('$', '_'),        # $ -> _
+                    # Handle URL encoded patterns
                     base_url.replace('%24%24', ''),    # URL encoded $$ -> (empty)
                     base_url.replace('%24%24', '_'),   # URL encoded $$ -> _
+                    base_url.replace('%24', ''),       # URL encoded $ -> (empty)
+                    base_url.replace('%24', '_'),      # URL encoded $ -> _
                 ]
                 variants.extend(url_patterns)
             else:
@@ -167,6 +182,10 @@ implementation:
                     logger.info(f"  URL: {variant_url}")
                     
                     try:
+                        # Add delay between requests to avoid overwhelming server
+                        if i > 1:  # Don't delay the first request
+                            time.sleep(2)
+                        
                         resp = session.get(variant_url, headers=header_set, stream=True, timeout=120)
                         resp.raise_for_status()
                         
