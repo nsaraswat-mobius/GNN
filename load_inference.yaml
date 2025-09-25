@@ -90,11 +90,11 @@ implementation:
 
     args:
       - --weights_cdn_url
-      - inputValue: "$$$$weights_cdn_url"
+      - inputValue: weights_cdn_url
       - --access_token
       - inputPath: access_token
       - --pickle_cdn_url
-      - inputValue: "$$$$pickle_cdn_url"
+      - inputValue: pickle_cdn_url
       - --model_weights
       - outputPath: model_weights
       - --pickle_file
