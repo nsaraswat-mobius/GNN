@@ -31,6 +31,7 @@ implementation:
         import argparse, os, requests, logging
         from requests.adapters import HTTPAdapter
         from urllib3.util.retry import Retry
+        from urllib.parse import unquote   # add this
 
         parser = argparse.ArgumentParser()
         parser.add_argument('--weights_cdn_url', type=str, required=True, help='CDN URL of weights file')
@@ -64,7 +65,8 @@ implementation:
         session.mount("https://", adapter)
 
         def download_file(url, out_path, name):
-            logger.info(f" Downloading {name} with retry + timeout")
+            url = unquote(url)  #  decode %24%24 → $$
+            logger.info(f" Downloading {name} from {url} with retry + timeout")
             resp = session.get(url, headers=headers, stream=True, timeout=60)
             resp.raise_for_status()
             os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
