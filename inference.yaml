@@ -35,7 +35,7 @@ implementation:
       - -c
       - |
         import argparse, os, torch, json
-        from nesy_factory.utils.data_utils import load_dataset, DataWrapper
+        from nesy_factory.utils.data_utils import DataWrapper
         from nesy_factory.utils.config_utils import get_config_by_name
         from nesy_factory.GNNs.model_factory import create_model
         
@@ -53,8 +53,7 @@ implementation:
             config.update(json.loads(args.config_json))
         
         # Load dataset using DataWrapper
-        data_dict = load_dataset(args.dataset, config)
-        data = DataWrapper(data_dict)
+        data = DataWrapper(args.dataset, config)
         print(f"Loaded Config: {config}")
         
         # Load model using config and factory method
