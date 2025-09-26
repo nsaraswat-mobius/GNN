@@ -58,11 +58,19 @@ implementation:
         
         print(f"Loaded Config: {config}")
         
-        # Load model using config and factory method
-        print(f"Creating STGNN model from config")
-        model = create_model('stgnn', config)
-        model.load_state_dict(torch.load(args.model_weights, map_location="cpu"))
-        model.eval()
+        # Load model using config and factory method or full model
+        print(f"Creating STGNN model from config / loading full model")
+        try:
+            checkpoint = torch.load(args.model_weights, map_location="cpu")
+            if isinstance(checkpoint, dict):
+                model = create_model('stgnn', config)
+                model.load_state_dict(checkpoint)
+            else:
+                model = checkpoint
+            model.eval()
+        except Exception as e:
+            print(f"Error loading model weights: {e}")
+            exit(1)
         print("Model created successfully.")
         print(model.get_model_info())
         
