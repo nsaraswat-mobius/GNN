@@ -31,7 +31,7 @@ implementation:
       - -u
       - -c
       - |
-        import argparse, os, torch, json
+        import argparse, os, torch, json, pickle
         from nesy_factory.utils.utils import *
         from nesy_factory.GNNs import create_model
         
