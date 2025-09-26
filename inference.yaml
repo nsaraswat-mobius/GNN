@@ -44,8 +44,7 @@ implementation:
         
         # Load data
         try:
-            with open(args.dataset, "rb") as f:
-                data = pickle.load(f)
+            data = torch.load(args.dataset, map_location="cpu")
             print(f"Successfully loaded data. Type: {type(data)}")
             if hasattr(data, 'x'):
                 print(f"Data shape: {data.x.shape}")
