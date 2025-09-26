@@ -15,7 +15,7 @@ outputs:
     type: Model
     description: The downloaded model weights artifact.
   - name: model_config_out
-    type: Data
+    type: Dataset
     description: The downloaded model config JSON (if applicable).
 implementation:
   container:
