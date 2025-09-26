@@ -91,7 +91,7 @@ implementation:
                 val_loader=data.val_loader,
                 y_val=data.y_val,
                 scaler=data.scaler,
-                num_components=8
+                num_components=config['num_nodes']
             )
             return json_result
         
