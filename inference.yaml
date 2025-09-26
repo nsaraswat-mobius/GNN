@@ -24,8 +24,6 @@ implementation:
       - sh
       - -c
       - |
-        python3 -m pip install nesy-factory torch || \
-        python3 -m pip install nesy-factory torch --user
         exec "$0" "$@"
       - python3
       - -u
