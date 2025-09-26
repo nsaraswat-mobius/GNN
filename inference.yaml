@@ -40,16 +40,16 @@ implementation:
         parser.add_argument('--inference_result', type=str, required=True, help='Path to save inference result JSON')
         args = parser.parse_args()
         
-        # Load data
+        #load data
         try:
-            data = torch.load(args.dataset, map_location="cpu")
+            with open(args.data_path, "rb") as f:
+                data = pickle.load(f)
             print(f"Successfully loaded data. Type: {type(data)}")
             if hasattr(data, 'x'):
                 print(f"Data shape: {data.x.shape}")
         except Exception as e:
             print(f"Error loading data: {e}")
             exit(1)
-
         # Load config
         if args.config_json:
             config=json.loads(args.config_json)
