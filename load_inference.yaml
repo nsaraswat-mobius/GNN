@@ -14,9 +14,6 @@ outputs:
   - name: model_weights_out
     type: Model
     description: The downloaded model weights artifact.
-  - name: model_config_out
-    type: Dataset
-    description: The downloaded model config JSON (if applicable).
 implementation:
   container:
     image: python:3.9
@@ -38,7 +35,6 @@ implementation:
         parser.add_argument('--data_out', type=str, required=True)
         parser.add_argument('--model_weights_url', type=str, required=True)
         parser.add_argument('--model_weights_out', type=str, required=True)
-        parser.add_argument('--model_config_out', type=str, required=True)
         args = parser.parse_args()
 
         args.data_url = args.data_url.replace("$$", "$$$")
@@ -56,12 +52,9 @@ implementation:
         r = requests.get(args.model_weights_url); r.raise_for_status()
         os.makedirs(os.path.dirname(args.model_weights_out), exist_ok=True)
 
-        if args.model_weights_url.endswith(".json"):
-            with open(args.model_config_out, "wb") as f: f.write(r.content)
-            print(f" Config JSON saved to {args.model_config_out}")
-        else:
-            with open(args.model_weights_out, "wb") as f: f.write(r.content)
-            print(f" Model weights saved to {args.model_weights_out}")
+        
+        with open(args.model_weights_out, "wb") as f: f.write(r.content)
+        print(f" Model weights saved to {args.model_weights_out}")
 
     args:
       - --data_url
@@ -72,5 +65,3 @@ implementation:
       - { inputValue: model_weights_url }
       - --model_weights_out
       - { outputPath: model_weights_out }
-      - --model_config_out
-      - { outputPath: model_config_out }
