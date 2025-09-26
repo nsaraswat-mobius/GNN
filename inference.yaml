@@ -42,7 +42,7 @@ implementation:
         
         #load data
         try:
-            with open(args.data_path, "rb") as f:
+            with open(args.dataset, "rb") as f:
                 data = pickle.load(f)
             print(f"Successfully loaded data. Type: {type(data)}")
             if hasattr(data, 'x'):
