@@ -32,6 +32,7 @@ implementation:
         import argparse
         import os
         import requests
+        import pickle
 
         parser = argparse.ArgumentParser(description="Download data and model weights from URLs.")
         parser.add_argument('--data_url', type=str, required=True, help='URL for the dataset.')
