@@ -54,7 +54,12 @@ implementation:
                 raise RuntimeError(f"Upload failed: {result.stderr}")
             response_json = json.loads(result.stdout)
             print(f"CDN upload response: {response_json}")
-            return response_json.get("filePath")
+
+            #  Fix: return cdnUrl (relative or absolute) instead of missing filePath
+            cdn_url = response_json.get("cdnUrl") or response_json.get("url")
+            if cdn_url and not cdn_url.startswith("http"):
+                cdn_url = f"{cdn_domain}{cdn_url}"
+            return cdn_url
 
         def update_instance_field(access_token, domain, schema_id, model_id, field, value):
             http = get_retry_session()
@@ -81,18 +86,19 @@ implementation:
             parser.add_argument('--updated_instance', type=str, required=True)
             args = parser.parse_args()
 
-            with open(args.access_token, 'r') as f: token = f.read().strip()
+            with open(args.access_token, 'r') as f: 
+                token = f.read().strip()
 
-            cdn_path = upload_file_to_cdn(args.retrained_model, token, args.domain, args.cdn_domain)
-            if not cdn_path:
+            cdn_url = upload_file_to_cdn(args.retrained_model, token, args.domain, args.cdn_domain)
+            if not cdn_url:
                 raise RuntimeError("CDN upload failed or file missing.")
 
-            updated_instance = update_instance_field(token, args.domain, args.schema_id, args.model_id, "model_weights_cdn", cdn_path)
+            updated_instance = update_instance_field(token, args.domain, args.schema_id, args.model_id, "model_weights_cdn", cdn_url)
 
             os.makedirs(os.path.dirname(args.updated_instance), exist_ok=True)
             with open(args.updated_instance, 'w') as f:
-                json.dump(updated_instance, f, indent=2)
-            print(f"Schema updated successfully.")
+                json.dump({"cdn_url": cdn_url, "schema_response": updated_instance}, f, indent=2)
+            print(f"Schema updated successfully with CDN URL: {cdn_url}")
 
         if __name__ == "__main__":
             main()
