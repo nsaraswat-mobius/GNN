@@ -11,6 +11,12 @@ inputs:
   - name: config_json
     type: String
     description: "Additional config JSON string for model"
+  - name: single_x
+    type: String
+    description: "Single input array (6x100) as JSON string"
+  - name: single_y
+    type: String
+    description: "Single ground truth array (6x1) as JSON string"
 
 outputs:
   - name: inference_result
@@ -37,10 +43,12 @@ implementation:
         parser.add_argument('--dataset', type=str, required=True, help='Path to dataset directory')
         parser.add_argument('--model_weights', type=str, required=True, help='Path to trained model weights')
         parser.add_argument('--config_json', type=str, required=False, help='Additional config JSON string')
+        parser.add_argument('--single_x', type=str, required=False, help='JSON string for single X (6x100)')
+        parser.add_argument('--single_y', type=str, required=False, help='JSON string for single Y (6x1)')
         parser.add_argument('--inference_result', type=str, required=True, help='Path to save inference result JSON')
         args = parser.parse_args()
         
-        #load data
+        # Load dataset
         try:
             with open(args.dataset, "rb") as f:
                 data = pickle.load(f)
@@ -50,13 +58,14 @@ implementation:
         except Exception as e:
             print(f"Error loading data: {e}")
             exit(1)
+
         # Load config
+        config = {}
         if args.config_json:
-            config=json.loads(args.config_json)
-        
+            config = json.loads(args.config_json)
         print(f"Loaded Config: {config}")
         
-        # Load model using config and factory method or full model
+        # Load model
         print(f"Creating STGNN model from config / loading full model")
         try:
             checkpoint = torch.load(args.model_weights, map_location="cpu")
@@ -72,15 +81,18 @@ implementation:
         print("Model created successfully.")
         print(model.get_model_info())
         
-        # Define inference function
-        def infer_and_detect_anomaly(model, data, config):
-            inference_idx = 100
-            if len(data.x_test) <= inference_idx:
-                print(f"Test set has less than {inference_idx + 1} data points.")
-                return {}
-            
-            single_x = torch.Tensor(data.x_test[inference_idx:inference_idx+1]).to(model.device)
-            single_y_true = data.y_test[inference_idx:inference_idx+1]
+        # Inference function
+        def infer_and_detect_anomaly(model, data, config, single_x=None, single_y=None):
+            if single_x is not None and single_y is not None:
+                single_x = torch.tensor(json.loads(single_x)).float().unsqueeze(0).to(model.device)
+                single_y_true = torch.tensor(json.loads(single_y)).float().unsqueeze(0)
+            else:
+                inference_idx = 100
+                if len(data.x_test) <= inference_idx:
+                    print(f"Test set has less than {inference_idx + 1} data points.")
+                    return {}
+                single_x = torch.Tensor(data.x_test[inference_idx:inference_idx+1]).to(model.device)
+                single_y_true = data.y_test[inference_idx:inference_idx+1]
             
             print(f"Single X Tensor: {single_x}")
             print(f"Single Y True: {single_y_true}")
@@ -91,11 +103,11 @@ implementation:
                 val_loader=data.val_loader,
                 y_val=data.y_val,
                 scaler=data.scaler,
-                num_components=config['num_nodes']
+                num_components=config.get('num_nodes', 1)
             )
             return json_result
         
-        result = infer_and_detect_anomaly(model, data, config)
+        result = infer_and_detect_anomaly(model, data, config, args.single_x, args.single_y)
         
         os.makedirs(os.path.dirname(args.inference_result) or ".", exist_ok=True)
         with open(args.inference_result, "w") as f:
@@ -110,5 +122,9 @@ implementation:
       - inputPath: model_weights
       - --config_json
       - inputValue: config_json
+      - --single_x
+      - inputValue: single_x
+      - --single_y
+      - inputValue: single_y
       - --inference_result
       - outputPath: inference_result
