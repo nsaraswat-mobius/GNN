@@ -92,7 +92,7 @@ implementation:
             os.makedirs(os.path.dirname(args.updated_instance), exist_ok=True)
             with open(args.updated_instance, 'w') as f:
                 json.dump(updated_instance, f, indent=2)
-            print("Schema updated successfully.")
+            print(f"Schema updated successfully.")
 
         if __name__ == "__main__":
             main()
