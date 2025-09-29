@@ -1,0 +1,68 @@
+
+name: Download Data and Model Weights
+description: Downloads a dataset, model weights, and optional config from specified URLs.
+inputs:
+  - name: data_url
+    type: String
+    description: URL to fetch the dataset from (e.g., a pickle, CSV, etc.).
+  - name: model_weights_url
+    type: String
+    description: URL to fetch the model weights file from (e.g., .h5, .pt, .bin, or config.json).
+outputs:
+  - name: data_out
+    type: Dataset
+    description: The downloaded dataset artifact.
+  - name: model_weights_out
+    type: Model
+    description: The downloaded model weights artifact.
+implementation:
+  container:
+    image: python:3.9
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        python3 -m pip install --quiet requests
+        exec "$0" "$@"
+      - python3
+      - -u
+      - -c
+      - |
+        import argparse, os, requests
+
+        parser = argparse.ArgumentParser(description="Download data, weights, and config from URLs.")
+        parser.add_argument('--data_url', type=str, required=True)
+        parser.add_argument('--data_out', type=str, required=True)
+        parser.add_argument('--model_weights_url', type=str, required=True)
+        parser.add_argument('--model_weights_out', type=str, required=True)
+        args = parser.parse_args()
+
+        args.data_url = args.data_url.replace("$$", "$$$")
+        args.model_weights_url = args.model_weights_url.replace("$$", "$$$")
+
+        # Download dataset
+        print(f"Fetching dataset from: {args.data_url}")
+        r = requests.get(args.data_url); r.raise_for_status()
+        os.makedirs(os.path.dirname(args.data_out), exist_ok=True)
+        with open(args.data_out, "wb") as f: f.write(r.content)
+        print(f" Dataset saved to {args.data_out}")
+
+        # Download weights/config
+        print(f"Fetching weights/config from: {args.model_weights_url}")
+        r = requests.get(args.model_weights_url); r.raise_for_status()
+        os.makedirs(os.path.dirname(args.model_weights_out), exist_ok=True)
+
+        
+        with open(args.model_weights_out, "wb") as f: f.write(r.content)
+        print(f" Model weights saved to {args.model_weights_out}")
+
+    args:
+      - --data_url
+      - { inputValue: data_url }
+      - --data_out
+      - { outputPath: data_out }
+      - --model_weights_url
+      - { inputValue: model_weights_url }
+      - --model_weights_out
+      - { outputPath: model_weights_out }
