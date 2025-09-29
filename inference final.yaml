@@ -1,0 +1,114 @@
+name: Inference and Anomaly Detection
+description: Runs inference on a query data point and detects anomalies using the trained model and dataset.
+
+inputs:
+  - name: dataset
+    type: Dataset
+    description: "Full dataset including test/validation splits"
+  - name: model_weights
+    type: Model
+    description: "Trained model weights for inference"
+  - name: config_json
+    type: String
+    description: "Additional config JSON string for model"
+
+outputs:
+  - name: inference_result
+    type: string
+    description: "JSON result of inference and anomaly detection"
+
+implementation:
+  container:
+    image: nikhilv215/nesy-factory:v18
+    command:
+      - sh
+      - -c
+      - |
+        exec "$0" "$@"
+      - python3
+      - -u
+      - -c
+      - |
+        import argparse, os, torch, json, pickle
+        from nesy_factory.utils.utils import *
+        from nesy_factory.GNNs import create_model
+        
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--dataset', type=str, required=True, help='Path to dataset directory')
+        parser.add_argument('--model_weights', type=str, required=True, help='Path to trained model weights')
+        parser.add_argument('--config_json', type=str, required=False, help='Additional config JSON string')
+        parser.add_argument('--inference_result', type=str, required=True, help='Path to save inference result JSON')
+        args = parser.parse_args()
+        
+        #load data
+        try:
+            with open(args.dataset, "rb") as f:
+                data = pickle.load(f)
+            print(f"Successfully loaded data. Type: {type(data)}")
+            if hasattr(data, 'x'):
+                print(f"Data shape: {data.x.shape}")
+        except Exception as e:
+            print(f"Error loading data: {e}")
+            exit(1)
+        # Load config
+        if args.config_json:
+            config=json.loads(args.config_json)
+        
+        print(f"Loaded Config: {config}")
+        
+        # Load model using config and factory method or full model
+        print(f"Creating STGNN model from config / loading full model")
+        try:
+            checkpoint = torch.load(args.model_weights, map_location="cpu")
+            if isinstance(checkpoint, dict):
+                model = create_model('stgnn', config)
+                model.load_state_dict(checkpoint)
+            else:
+                model = checkpoint
+            model.eval()
+        except Exception as e:
+            print(f"Error loading model weights: {e}")
+            exit(1)
+        print("Model created successfully.")
+        print(model.get_model_info())
+        
+        # Define inference function
+        def infer_and_detect_anomaly(model, data, config):
+            inference_idx = 100
+            if len(data.x_test) <= inference_idx:
+                print(f"Test set has less than {inference_idx + 1} data points.")
+                return {}
+            
+            single_x = torch.Tensor(data.x_test[inference_idx:inference_idx+1]).to(model.device)
+            single_y_true = data.y_test[inference_idx:inference_idx+1]
+            
+            print(f"Single X Tensor: {single_x}")
+            print(f"Single Y True: {single_y_true}")
+            
+            json_result = model.infer_step(
+                single_x=single_x,
+                single_y_true=single_y_true,
+                val_loader=data.val_loader,
+                y_val=data.y_val,
+                scaler=data.scaler,
+                num_components=config['num_nodes']
+            )
+            return json_result
+        
+        result = infer_and_detect_anomaly(model, data, config)
+        
+        os.makedirs(os.path.dirname(args.inference_result) or ".", exist_ok=True)
+        with open(args.inference_result, "w") as f:
+            json.dump(result, f, indent=2)
+        
+        print(f"Inference completed. Results saved.")
+
+    args:
+      - --dataset
+      - inputPath: dataset
+      - --model_weights
+      - inputPath: model_weights
+      - --config_json
+      - inputValue: config_json
+      - --inference_result
+      - outputPath: inference_result
