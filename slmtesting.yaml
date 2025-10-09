@@ -17,28 +17,28 @@ implementation:
     - sh
     - -c
     - |
-      python3 -c "
+      python3 -c '
       import argparse
       import os
       import json
       
       parser = argparse.ArgumentParser()
-      parser.add_argument('--api_url', type=str, required=True)
-      parser.add_argument('--access_token', type=str, required=True)
-      parser.add_argument('--extracted_text', type=str, required=True)
-      parser.add_argument('--metadata', type=str, required=True)
+      parser.add_argument("--api_url", type=str, required=True)
+      parser.add_argument("--access_token", type=str, required=True)
+      parser.add_argument("--extracted_text", type=str, required=True)
+      parser.add_argument("--metadata", type=str, required=True)
       args = parser.parse_args()
       
-      os.makedirs(os.path.dirname(args.extracted_text) or '.', exist_ok=True)
-      with open(args.extracted_text, 'w') as f:
-          f.write('test content\n')
+      os.makedirs(os.path.dirname(args.extracted_text) or ".", exist_ok=True)
+      with open(args.extracted_text, "w") as f:
+          f.write("test content\n")
       
-      os.makedirs(os.path.dirname(args.metadata) or '.', exist_ok=True)
-      with open(args.metadata, 'w') as f:
-          json.dump({'status': 'success'}, f)
+      os.makedirs(os.path.dirname(args.metadata) or ".", exist_ok=True)
+      with open(args.metadata, "w") as f:
+          json.dump({"status": "success"}, f)
       
-      print('Done')
-      " "$@"
+      print("Done")
+      ' "$@"
     args:
     - --api_url
     - {inputValue: api_url}
