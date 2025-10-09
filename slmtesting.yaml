@@ -39,7 +39,6 @@ implementation:
             logging.basicConfig(level=logging.INFO)
             logger = logging.getLogger('extractor')
 
-            # Handle token input - can be file path or direct token
             token_arg = args.access_token.strip()
             if os.path.exists(token_arg):
                 with open(token_arg, 'r') as f:
@@ -47,35 +46,28 @@ implementation:
             else:
                 access_token = token_arg
 
-            # Setup session with retry logic
             session = requests.Session()
-            retries = Retry(
-                total=5,
-                backoff_factor=1,
-                status_forcelist=[429, 500, 502, 503, 504]
-            )
+            retries = Retry(total=5, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
             adapter = HTTPAdapter(max_retries=retries)
             session.mount('http://', adapter)
             session.mount('https://', adapter)
 
-            headers = {'Authorization': f'Bearer {access_token}'}
+            headers = {'Authorization': 'Bearer ' + access_token}
 
             try:
                 resp = session.get(args.api_url, headers=headers, timeout=60)
                 resp.raise_for_status()
                 raw_data = resp.json()
-                logger.info(f"Successfully fetched data from API")
+                logger.info("Successfully fetched data from API")
             except Exception as e:
-                logger.error(f'API request failed: {str(e)}')
+                logger.error('API request failed: ' + str(e))
                 raise
 
-            # Define extraction keys
             CHILD_KEYS = ['subsections', 'sections', 'children', 'items']
             TITLE_KEYS = ['title', 'heading', 'name']
             CONTENT_KEYS = ['content', 'text', 'body']
 
             def iter_children(node):
-                """Extract child nodes from a document node"""
                 for key in CHILD_KEYS:
                     value = node.get(key)
                     if isinstance(value, list):
@@ -83,7 +75,6 @@ implementation:
                 return []
 
             def get_first(node, keys):
-                """Get first non-empty value from node using provided keys"""
                 for key in keys:
                     val = node.get(key)
                     if val:
@@ -91,7 +82,6 @@ implementation:
                 return ''
 
             def extract_recursive(node, path=''):
-                """Recursively extract content from nested document structure"""
                 results = []
                 title = get_first(node, TITLE_KEYS)
                 content = get_first(node, CONTENT_KEYS)
@@ -105,12 +95,11 @@ implementation:
                 
                 children = iter_children(node)
                 for idx, child in enumerate(children):
-                    subpath = f"{path}/sub_{idx}" if path else f"sub_{idx}"
+                    subpath = path + '/sub_' + str(idx) if path else 'sub_' + str(idx)
                     results.extend(extract_recursive(child, subpath))
                 
                 return results
 
-            # Process the API response
             all_rows = []
             response_items = raw_data if isinstance(raw_data, list) else [raw_data]
 
@@ -130,7 +119,7 @@ implementation:
                         structured_data = data.get('structuredTextJsonData', {})
                         document = structured_data.get('document', {})
                         
-                        path_prefix = f"r{resp_idx}_i{ind_idx}_s{res_idx}"
+                        path_prefix = 'r' + str(resp_idx) + '_i' + str(ind_idx) + '_s' + str(res_idx)
                         extracted_items = extract_recursive(document, path_prefix)
                         
                         for item in extracted_items:
@@ -140,23 +129,20 @@ implementation:
                         
                         all_rows.extend(extracted_items)
 
-            logger.info(f'Extracted {len(all_rows)} segments from API response')
+            logger.info('Extracted ' + str(len(all_rows)) + ' segments from API response')
 
-            # Convert to DataFrame for processing
             if all_rows:
                 df = pd.DataFrame(all_rows)
             else:
                 df = pd.DataFrame(columns=['title', 'content'])
 
             def clean_text(text):
-                """Clean and normalize text content"""
                 if not text:
                     return ''
                 text = re.sub(r'\s+', ' ', text)
                 return text.strip()
 
             def combine_text(row):
-                """Combine title and content into full text"""
                 title = clean_text(row.get('title', ''))
                 content = clean_text(row.get('content', ''))
                 parts = []
@@ -166,26 +152,22 @@ implementation:
                     parts.append(content)
                 return ' '.join(parts)
 
-            # Process the extracted data
             if len(df) > 0:
                 df['full_text'] = df.apply(combine_text, axis=1)
                 df = df[df['full_text'].str.len() > 0].reset_index(drop=True)
             else:
                 df = pd.DataFrame({'full_text': []})
 
-            # Save extracted text
             os.makedirs(os.path.dirname(args.extracted_text) or '.', exist_ok=True)
             with open(args.extracted_text, 'w', encoding='utf-8') as f:
                 for line in df['full_text']:
                     f.write(line)
                     f.write('\n')
 
-            # Save metadata
             metadata = {
                 'total_segments': len(all_rows),
                 'processed_segments': len(df),
-                'api_url': args.api_url,
-                'extraction_timestamp': pd.Timestamp.now().isoformat()
+                'api_url': args.api_url
             }
             
             os.makedirs(os.path.dirname(args.metadata) or '.', exist_ok=True)
