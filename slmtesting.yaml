@@ -14,9 +14,10 @@ implementation:
   container:
     image: nikhilv215/nesy-factory:v22
     command:
-    - python3
+    - sh
     - -c
     - |
+      python3 -c "
       import argparse
       import os
       import json
@@ -28,7 +29,6 @@ implementation:
       parser.add_argument('--metadata', type=str, required=True)
       args = parser.parse_args()
       
-      # Create simple test files
       os.makedirs(os.path.dirname(args.extracted_text) or '.', exist_ok=True)
       with open(args.extracted_text, 'w') as f:
           f.write('test content\n')
@@ -38,6 +38,7 @@ implementation:
           json.dump({'status': 'success'}, f)
       
       print('Done')
+      " "$@"
     args:
     - --api_url
     - {inputValue: api_url}
