@@ -1,50 +1,53 @@
 name: Load and extract text from structured document API
 description: Fetches nested JSON from API and extracts all content and titles for model training
 inputs:
-- name: api_url
-  type: String
-- name: access_token
-  type: String
+  - {name: api_url, type: String}
+  - {name: access_token, type: String}
 outputs:
-- name: extracted_text
-  type: Data
-- name: metadata
-  type: Data
+  - {name: extracted_text, type: Data}
+  - {name: metadata, type: Data}
 implementation:
   container:
     image: nikhilv215/nesy-factory:v22
     command:
-    - sh
-    - -c
-    - |
-      python3 -c '
-      import argparse
-      import os
-      import json
-      
-      parser = argparse.ArgumentParser()
-      parser.add_argument("--api_url", type=str, required=True)
-      parser.add_argument("--access_token", type=str, required=True)
-      parser.add_argument("--extracted_text", type=str, required=True)
-      parser.add_argument("--metadata", type=str, required=True)
-      args = parser.parse_args()
-      
-      os.makedirs(os.path.dirname(args.extracted_text) or ".", exist_ok=True)
-      with open(args.extracted_text, "w") as f:
-          f.write("test content\n")
-      
-      os.makedirs(os.path.dirname(args.metadata) or ".", exist_ok=True)
-      with open(args.metadata, "w") as f:
-          json.dump({"status": "success"}, f)
-      
-      print("Done")
-      ' "$@"
+      - sh
+      - -c
+      - |
+        exec "$0" "$@"
+      - python3
+      - -u
+      - -c
+      - |
+        import argparse
+        import os
+        import json
+        
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--api_url', type=str, required=True)
+        parser.add_argument('--access_token', type=str, required=True)
+        parser.add_argument('--extracted_text', type=str, required=True)
+        parser.add_argument('--metadata', type=str, required=True)
+        args = parser.parse_args()
+        
+        print(f"API URL: {args.api_url}")
+        print(f"Access Token length: {len(args.access_token)}")
+        
+        # Create dummy outputs for testing
+        os.makedirs(os.path.dirname(args.extracted_text) or '.', exist_ok=True)
+        with open(args.extracted_text, 'w') as f:
+            f.write("Test extracted text\n")
+        
+        os.makedirs(os.path.dirname(args.metadata) or '.', exist_ok=True)
+        with open(args.metadata, 'w') as f:
+            json.dump({"status": "test"}, f)
+        
+        print("Test completed successfully")
     args:
-    - --api_url
-    - {inputValue: api_url}
-    - --access_token
-    - {inputValue: access_token}
-    - --extracted_text
-    - {outputPath: extracted_text}
-    - --metadata
-    - {outputPath: metadata}
+      - --api_url
+      - {inputValue: api_url}
+      - --access_token
+      - {inputValue: access_token}
+      - --extracted_text
+      - {outputPath: extracted_text}
+      - --metadata
+      - {outputPath: metadata}
