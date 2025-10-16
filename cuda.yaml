@@ -1,0 +1,55 @@
+name: test cuda2
+description: hhhdhd1
+inputs: []
+outputs:
+  - {name: cuda_status, type: String, description: "CUDA working status (WORKING/NOT_AVAILABLE)"}
+implementation:
+  container:
+    image: gurpreetgandhi/nesy-factory:v23gpu
+    command:
+      - python3
+      - -u
+      - -c
+      - |
+        import argparse
+        import torch
+        import os
+        
+        parser = argparse.ArgumentParser(description="Test CUDA availability.")
+        parser.add_argument('--cuda_status', type=str, required=True, help='Path to output CUDA status.')
+        args = parser.parse_args()
+        
+        print("Testing CUDA...")
+        
+        if torch.cuda.is_available():
+            print(f"CUDA: Available")
+            print(f"GPU: {torch.cuda.get_device_name(0)}")
+            
+            # Simple GPU test
+            try:
+                x = torch.tensor([1.0, 2.0]).cuda()
+                y = x * 2
+                print(f"GPU test result: {y}")
+                status = "WORKING"
+            except Exception as e:
+                print(f"GPU test failed: {e}")
+                status = "NOT_AVAILABLE"
+        else:
+            print("CUDA: Not available")
+            status = "NOT_AVAILABLE"
+        
+        print(f"Final Status: {status}")
+        
+        # Write output to file
+        output_dir = os.path.dirname(args.cuda_status)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        
+        with open(args.cuda_status, "w") as f:
+            f.write(status)
+        
+        print(f"Status written to: {args.cuda_status}")
+
+    args:
+      - --cuda_status
+      - {outputPath: cuda_status}
