@@ -1,0 +1,301 @@
+name: Preprocess dataset for PCA
+description: Takes raw cluster health JSON data, performs preprocessing and feature engineering for PCA-based anomaly detection.
+inputs:
+  - {name: json_data, type: Dataset}
+outputs:
+  - {name: processed_data_pickle, type: Dataset}
+  - {name: pca_components, type: Dataset}
+  - {name: preprocessing_info, type: String, description: "JSON string with preprocessing metadata"}
+implementation:
+  container:
+    image: python:3.9
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        pip install pandas scikit-learn numpy
+
+        # Create working directory
+        TMP_DIR=$(mktemp -d -t pca-preprocess-XXXXXXXXXX)
+        cd "$TMP_DIR"
+
+        # Copy input data
+        cp "$0" raw_data.pkl
+
+        # Create preprocessing script
+        cat > pca_preprocessing.py << 'EOF'
+        import json
+        import pandas as pd
+        import numpy as np
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.decomposition import PCA
+        import pickle
+        import os
+        from datetime import datetime
+
+        class DataWrapper:
+            def __init__(self, data_dict):
+                self.__dict__.update(data_dict)
+
+        def load_and_clean_data(file_path):
+            with open(file_path, 'rb') as f:
+                data = pickle.load(f)
+            
+            # Extract the actual records from the API response
+            # Based on your sample, the data seems to be a list of dictionaries
+            if isinstance(data, dict) and 'content' in data:
+                records = data['content']
+            elif isinstance(data, list):
+                records = data
+            else:
+                records = data  # Fallback to whatever structure it is
+            
+            print(f"Loaded {len(records)} records")
+            print(f"Sample record: {records[0] if records else 'No records'}")
+            
+            df = pd.DataFrame(records)
+            
+            # Convert numeric columns from string to float
+            numeric_columns = ['endpoint_count', 'reachable_frac', 'deg_cent', 'betw_cent', 'clustering', 'pagerank']
+            for col in numeric_columns:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                else:
+                    print(f"Warning: Column {col} not found in data")
+            
+            # Convert timestamp to datetime
+            if 'execution_timestamp' in df.columns:
+                df['execution_timestamp'] = pd.to_numeric(df['execution_timestamp'], errors='coerce')
+                df['timestamp'] = pd.to_datetime(df['execution_timestamp'], unit='ms')
+                # Sort by timestamp for time series consistency
+                df = df.sort_values('timestamp').reset_index(drop=True)
+            else:
+                print("Warning: execution_timestamp not found, using index as time reference")
+                df['timestamp'] = pd.to_datetime('now')  # Fallback
+            
+            print(f"DataFrame shape: {df.shape}")
+            print(f"Columns: {df.columns.tolist()}")
+            
+            return df
+
+        def create_features(df):
+            features_list = []
+            
+            # Basic numeric features
+            base_features = ['endpoint_count', 'reachable_frac', 'deg_cent', 'betw_cent', 'clustering', 'pagerank']
+            available_features = [f for f in base_features if f in df.columns]
+            
+            if not available_features:
+                raise ValueError("No numeric features found in the dataset")
+            
+            print(f"Using features: {available_features}")
+            
+            features = df[available_features].copy()
+            
+            # Time-based features if timestamp is available
+            if 'timestamp' in df.columns:
+                df['hour'] = df['timestamp'].dt.hour
+                df['day_of_week'] = df['timestamp'].dt.dayofweek
+                df['day_of_month'] = df['timestamp'].dt.day
+                df['month'] = df['timestamp'].dt.month
+                
+                # Cyclical encoding for time features
+                features['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
+                features['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
+                features['day_sin'] = np.sin(2 * np.pi * df['day_of_week'] / 7)
+                features['day_cos'] = np.cos(2 * np.pi * df['day_of_week'] / 7)
+                features['month_sin'] = np.sin(2 * np.pi * df['month'] / 12)
+                features['month_cos'] = np.cos(2 * np.pi * df['month'] / 12)
+            
+            # Component-based features if multiple components exist
+            if 'component_id' in df.columns and len(df['component_id'].unique()) > 1:
+                component_stats = df.groupby('component_id').agg({
+                    'endpoint_count': ['mean', 'std', 'min', 'max'],
+                    'reachable_frac': ['mean', 'std'],
+                    'deg_cent': ['mean', 'std']
+                }).fillna(0)
+                
+                component_stats.columns = ['_'.join(col).strip() for col in component_stats.columns.values]
+                component_stats = component_stats.reset_index()
+                
+                df = df.merge(component_stats, on='component_id', how='left')
+                
+                # Add component-level features
+                for stat_col in ['endpoint_count_mean', 'endpoint_count_std', 'reachable_frac_mean', 'deg_cent_mean']:
+                    if stat_col in df.columns:
+                        features[stat_col] = df[stat_col]
+                        features[f'{stat_col}_diff'] = df['endpoint_count'] - df.get('endpoint_count_mean', 0)
+            
+            # Rolling statistics for time series features (if we have enough data points)
+            if len(df) > 10:
+                for window in [5, 10]:
+                    for col in available_features:
+                        if col in ['endpoint_count', 'reachable_frac', 'deg_cent']:
+                            features[f'{col}_rolling_mean_{window}'] = df[col].rolling(window=min(window, len(df)), min_periods=1).mean()
+                            features[f'{col}_rolling_std_{window}'] = df[col].rolling(window=min(window, len(df)), min_periods=1).std()
+            
+            # Fill any remaining NaN values
+            features = features.fillna(0)
+            
+            print(f"Final feature matrix shape: {features.shape}")
+            print(f"Feature columns: {features.columns.tolist()}")
+            
+            return features
+
+        def perform_pca_preprocessing(features, n_components=0.95):
+            # Standardize features
+            scaler = StandardScaler()
+            features_scaled = scaler.fit_transform(features)
+            
+            print(f"Scaled features shape: {features_scaled.shape}")
+            
+            # Determine optimal number of components
+            if n_components < 1:
+                pca = PCA(n_components=n_components)
+                features_pca = pca.fit_transform(features_scaled)
+                n_components_actual = pca.n_components_
+            else:
+                n_components = min(n_components, features_scaled.shape[1])
+                pca = PCA(n_components=n_components)
+                features_pca = pca.fit_transform(features_scaled)
+                n_components_actual = pca.n_components_
+            
+            # Calculate reconstruction error for anomaly detection
+            features_reconstructed = pca.inverse_transform(features_pca)
+            reconstruction_error = np.sqrt(np.mean((features_scaled - features_reconstructed) ** 2, axis=1))
+            
+            # Create result dictionary
+            result = {
+                'features_original': features.values,
+                'features_scaled': features_scaled,
+                'features_pca': features_pca,
+                'feature_names': list(features.columns),
+                'scaler': scaler,
+                'pca': pca,
+                'reconstruction_error': reconstruction_error,
+                'explained_variance_ratio': pca.explained_variance_ratio_,
+                'n_components': n_components_actual,
+                'cumulative_variance': np.cumsum(pca.explained_variance_ratio_),
+                'total_variance_explained': np.sum(pca.explained_variance_ratio_)
+            }
+            
+            return result
+
+        def create_data_wrapper(pca_result, original_df):
+            n_samples = len(pca_result['features_pca'])
+            
+            # Split data for training/validation/test
+            train_size = int(0.7 * n_samples)
+            val_size = int(0.15 * n_samples)
+            
+            data_dict = {
+                'x_train': pca_result['features_pca'][:train_size],
+                'x_val': pca_result['features_pca'][train_size:train_size + val_size],
+                'x_test': pca_result['features_pca'][train_size + val_size:],
+                'y_train': np.zeros(train_size),  # Dummy labels for compatibility
+                'y_val': np.zeros(val_size),
+                'y_test': np.zeros(n_samples - train_size - val_size),
+                'feature_names': pca_result['feature_names'],
+                'scaler': pca_result['scaler'],
+                'pca': pca_result['pca'],
+                'reconstruction_error': pca_result['reconstruction_error'],
+                'explained_variance': pca_result['explained_variance_ratio'],
+                'cumulative_variance': pca_result['cumulative_variance'],
+                'total_variance_explained': pca_result['total_variance_explained'],
+                'original_timestamps': original_df['timestamp'].values if 'timestamp' in original_df.columns else None,
+                'component_ids': original_df['component_id'].values if 'component_id' in original_df.columns else None,
+                'project_ids': original_df['projectid'].values if 'projectid' in original_df.columns else None
+            }
+            
+            return DataWrapper(data_dict)
+
+        def main():
+            # Load and preprocess data
+            df = load_and_clean_data('raw_data.pkl')
+            features = create_features(df)
+            
+            # Perform PCA
+            pca_result = perform_pca_preprocessing(features, n_components=0.95)
+            
+            # Create DataWrapper
+            data_wrapper = create_data_wrapper(pca_result, df)
+            
+            # Save processed data
+            output_path = os.environ['PROCESSED_DATA_PICKLE_PATH']
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            with open(output_path, 'wb') as f:
+                pickle.dump(data_wrapper, f)
+            
+            # Save PCA components separately
+            pca_components_path = os.environ['PCA_COMPONENTS_PATH']
+            pca_components_data = {
+                'components': pca_result['pca'].components_,
+                'explained_variance': pca_result['explained_variance_ratio'],
+                'feature_names': pca_result['feature_names'],
+                'mean': pca_result['pca'].mean_,
+                'n_components': pca_result['n_components']
+            }
+            
+            with open(pca_components_path, 'wb') as f:
+                pickle.dump(pca_components_data, f)
+            
+            # Create preprocessing info JSON
+            preprocessing_info = {
+                'original_shape': df.shape,
+                'feature_shape': features.shape,
+                'pca_components': pca_result['n_components'],
+                'total_variance_explained': float(pca_result['total_variance_explained']),
+                'feature_columns': list(features.columns),
+                'preprocessing_timestamp': datetime.now().isoformat(),
+                'data_statistics': {
+                    'n_records': len(df),
+                    'n_features_original': features.shape[1],
+                    'n_features_pca': pca_result['n_components'],
+                    'reconstruction_error_stats': {
+                        'mean': float(np.mean(pca_result['reconstruction_error'])),
+                        'std': float(np.std(pca_result['reconstruction_error'])),
+                        'max': float(np.max(pca_result['reconstruction_error'])),
+                        'min': float(np.min(pca_result['reconstruction_error']))
+                    }
+                }
+            }
+            
+            # Add timestamp range if available
+            if 'timestamp' in df.columns:
+                preprocessing_info['timestamp_range'] = {
+                    'start': df['timestamp'].min().isoformat(),
+                    'end': df['timestamp'].max().isoformat()
+                }
+            
+            # Add component info if available
+            if 'component_id' in df.columns:
+                preprocessing_info['component_ids'] = df['component_id'].unique().tolist()
+            
+            info_path = os.environ['PREPROCESSING_INFO_PATH']
+            os.makedirs(os.path.dirname(info_path), exist_ok=True)
+            with open(info_path, 'w') as f:
+                json.dump(preprocessing_info, f, indent=2)
+            
+            print(f"PCA preprocessing completed successfully!")
+            print(f"Original features: {features.shape[1]}")
+            print(f"PCA components: {pca_result['n_components']}")
+            print(f"Variance explained: {pca_result['total_variance_explained']:.3f}")
+            print(f"Data splits - Train: {len(data_wrapper.x_train)}, Val: {len(data_wrapper.x_val)}, Test: {len(data_wrapper.x_test)}")
+
+        if __name__ == '__main__':
+            main()
+        EOF
+
+        # Run preprocessing
+        PROCESSED_DATA_PICKLE_PATH="$1" \
+        PCA_COMPONENTS_PATH="$2" \
+        PREPROCESSING_INFO_PATH="$3" \
+        python pca_preprocessing.py
+
+    args:
+      - {inputPath: json_data}
+      - {outputPath: processed_data_pickle}
+      - {outputPath: pca_components}
+      - {outputPath: preprocessing_info}
