@@ -118,7 +118,7 @@ implementation:
         parser.add_argument('--epoch_loss', type=str, required=True)
         args = parser.parse_args()
 
-        print(f"🔧 Starting GNN Training with BULLETPROOF STGNN support")
+        print(f" Starting GNN Training with BULLETPROOF STGNN support")
         print(f"Data path: {args.data_path}")
         print(f"Model path: {args.model}")
         print(f"Config: {args.config}")
