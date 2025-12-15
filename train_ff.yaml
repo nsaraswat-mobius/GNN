@@ -1,5 +1,5 @@
 name: V_Train_GNN_FF_Fixed
-description: Trains GNN with BULLETPROOF STGNN support
+description: Trains GNN with BULLETPROOF STGNN support - PRODUCTION READY
 inputs:
   - {name: data_path, type: Dataset}           
   - {name: model, type: Model}            
@@ -216,6 +216,10 @@ implementation:
         model_name = config.get('model_name', 'stgnn')
         use_cafo_from_config = config.get('use_cafo', False)
         use_ff_from_config = config.get('use_forward_forward', False)
+        
+        # Define training_mode early to avoid NameError
+        training_mode = 'forward_forward' if use_ff_from_config else \
+                       'cafo' if use_cafo_from_config else 'traditional'
         
         print(f"Creating {model_name} model...")
         print(f"   CAFO: {use_cafo_from_config}, Forward-Forward: {use_ff_from_config}")
@@ -481,9 +485,6 @@ implementation:
             })
 
         # Save outputs
-        training_mode = 'forward_forward' if use_ff_from_config else \
-                       'cafo' if use_cafo_from_config else 'traditional'
-        
         print(f"Saving results...")
         
         # CRITICAL FIX: Save to corrected Argo paths
