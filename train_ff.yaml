@@ -1,5 +1,5 @@
 name: Train_GNN_FF_Fixed
-description: Trains GNN with BULLETPROOF STGNN support - PRODUCTION READY
+description: Trains GNN with BULLETPROOF STGNN support
 inputs:
   - {name: data_path, type: Dataset}           
   - {name: model, type: Model}            
