@@ -1,4 +1,4 @@
-name: V_Train_GNN_FF_Fixed
+name: Train_GNN_FF_Fixed
 description: Trains GNN with BULLETPROOF STGNN support
 inputs:
   - {name: data_path, type: Dataset}           
@@ -9,7 +9,7 @@ outputs:
   - {name: epoch_loss, type: String}       
 implementation:
   container:
-    image: gurpreetgandhi/nesy-factory:v38-gpu
+    image: gurpreetgandhi/nesy-factory:v33
     command:
       - sh
       - -c
@@ -32,28 +32,42 @@ implementation:
         sys.path.insert(0, '/workspace/src')  # Alternative path
         sys.path.insert(0, '/code/src')  # Alternative path
         
-        # CRITICAL FIX: Import torch first and avoid torchvision completely
+        # CRITICAL FIX: Completely prevent torchvision from loading
+        import sys
+        import os
+        
+        # Block torchvision imports by removing it from available modules
+        original_import = __builtins__.__import__
+        
+        def block_torchvision_import(name, *args, **kwargs):
+            if 'torchvision' in name:
+                print(f"BLOCKED torchvision import: {name}")
+                # Create a dummy module to prevent errors
+                import types
+                dummy_module = types.ModuleType(name)
+                sys.modules[name] = dummy_module
+                return dummy_module
+            return original_import(name, *args, **kwargs)
+        
+        # Replace the import function
+        __builtins__.__import__ = block_torchvision_import
+        
+        # Now import torch safely
         import torch
         import torch.nn as nn
         import torch.optim as optim
         import torch.nn.functional as F
         
-        # Remove any torchvision from path to prevent circular imports
-        import sys
-        modules_to_remove = [module for module in sys.modules.keys() if 'torchvision' in module]
-        for module in modules_to_remove:
-            del sys.modules[module]
+        print("PyTorch imported successfully with torchvision blocked")
         
-        print("PyTorch imported successfully")
-        
-        # Direct STGNN import to bypass factory issues
+        # Direct STGNN import with torchvision blocked
         try:
-            # Try direct import from your package structure
+            # Now we can safely import from nesy_factory since torchvision is blocked
             from nesy_factory.GNNs.stgnn import STGNN, CaFOSTGNNBlock, ForwardForwardSTGNNBlock
-            print("STGNN classes imported successfully")
+            print("STGNN classes imported successfully with torchvision blocked")
             STGNN_AVAILABLE = True
         except ImportError as e:
-            print(f"STGNN import failed: {e}")
+            print(f"STGNN import failed even with torchvision blocked: {e}")
             STGNN_AVAILABLE = False
         
         # Fallback to factory import if direct import fails
@@ -67,6 +81,10 @@ implementation:
                 FACTORY_AVAILABLE = False
         else:
             FACTORY_AVAILABLE = False
+        
+        # Restore normal import function after nesy_factory is loaded
+        __builtins__.__import__ = original_import
+        print("Import function restored to normal")
         
         class DataWrapper:
           def __init__(self, data_dict):
