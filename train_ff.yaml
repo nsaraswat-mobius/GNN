@@ -1,12 +1,13 @@
 name: V_Train_GNN_FF_Fixed
-description: Trains GNN with BULLETPROOF STGNN support - PRODUCTION READY
+description: Trains STGNN with Backprop / CAFO / Forward-Forward (Bulletproof)
 inputs:
-  - {name: data_path, type: Dataset}           
-  - {name: model, type: Model}            
-  - {name: config, type: String}          
+  - { name: data_path, type: Dataset }
+  - { name: model, type: Model }
+  - { name: config, type: String }
 outputs:
-  - {name: trained_model, type: Model}     
-  - {name: epoch_loss, type: String}       
+  - { name: trained_model, type: Model }
+  - { name: epoch_loss, type: String }
+
 implementation:
   container:
     image: gurpreetgandhi/nesy-factory:v38-gpu
@@ -14,186 +15,181 @@ implementation:
       - sh
       - -c
       - |
-        exec "$0" "$@"
-      - python3
-      - -u
-      - -c
-      - |
-        import os, sys, json, pickle, argparse, types
+        exec python3 -u - << 'EOF'
+        import os, sys, json, pickle, argparse
         import torch
-        import torch.nn as nn
-        import torch.optim as optim
-        import torch.nn.functional as F
-        
-        # ===========================
-        # Block torchvision imports
-        # ===========================
+        import numpy as np
+
+        # =====================================================
+        # BLOCK TORCHVISION (circular import fix)
+        # =====================================================
         original_import = __builtins__.__import__
-        def block_torchvision_import(name, *args, **kwargs):
-            if 'torchvision' in name:
+        def block_torchvision(name, *args, **kwargs):
+            if "torchvision" in name:
+                import types
                 dummy = types.ModuleType(name)
                 sys.modules[name] = dummy
-                print(f"BLOCKED torchvision import: {name}")
                 return dummy
             return original_import(name, *args, **kwargs)
-        __builtins__.__import__ = block_torchvision_import
-        
-        # Import STGNN safely
+        __builtins__.__import__ = block_torchvision
+
+        # =====================================================
+        # SAFE DUMMY CLASSES FOR PICKLE
+        # =====================================================
+        class DataWrapper: pass
+        class DataLoaderM: pass
+        class StandardScaler: pass
+
+        # =====================================================
+        # IMPORT STGNN
+        # =====================================================
+        sys.path.insert(0, "/app/src")
         try:
-            from nesy_factory.GNNs.stgnn import STGNN, CaFOSTGNNBlock, ForwardForwardSTGNNBlock
+            from nesy_factory.GNNs.stgnn import STGNN
             STGNN_AVAILABLE = True
-        except ImportError:
-            from nesy_factory.GNNs import create_model
-            STGNN_AVAILABLE = False
-        
-        __builtins__.__import__ = original_import  # restore imports
-        
-        # ===========================
-        # Helper classes
-        # ===========================
-        class StandardScaler:
-            def __init__(self, mean, std): self.mean, self.std = mean, std
-            def transform(self, data): return (data - self.mean) / self.std
-            def inverse_transform(self, data): return (data * self.std) + self.mean
-        
-        class DataLoaderM:
-            def __init__(self, xs, ys, batch_size, pad_with_last_sample=True):
-                self.batch_size = batch_size
-                if pad_with_last_sample:
-                    num_padding = (batch_size - (len(xs) % batch_size)) % batch_size
-                    xs = torch.cat([xs, xs[-1:].repeat(num_padding,1,1,1)], dim=0)
-                    ys = torch.cat([ys, ys[-1:].repeat(num_padding,1,1,1)], dim=0)
-                self.xs, self.ys = xs, ys
-                self.size = len(xs)
-                self.num_batch = self.size // batch_size
-                self.current_ind = 0
-            def shuffle(self):
-                perm = torch.randperm(self.size)
-                self.xs, self.ys = self.xs[perm], self.ys[perm]
-            def get_iterator(self):
-                self.current_ind = 0
-                while self.current_ind < self.num_batch:
-                    start = self.current_ind * self.batch_size
-                    end = start + self.batch_size
-                    yield self.xs[start:end], self.ys[start:end]
-                    self.current_ind += 1
-        
-        class STGNNDataWrapper:
-            def __init__(self, x_data, y_data, scaler=None, batch_size=32):
-                self.x_data, self.y_data = x_data, y_data
-                self.scaler = scaler or StandardScaler(x_data.mean(), x_data.std())
-                self.train_loader = DataLoaderM(x_data, y_data, batch_size)
-        
-        # ===========================
-        # Parse args
-        # ===========================
-        parser = argparse.ArgumentParser()
-        parser.add_argument('--data_path', type=str, required=True)
-        parser.add_argument('--model', type=str, required=True)
-        parser.add_argument('--config', type=str, required=True)
-        parser.add_argument('--trained_model', type=str, required=True)
-        parser.add_argument('--epoch_loss', type=str, required=True)
-        args = parser.parse_args()
-        
-        # ===========================
-        # Load config
-        # ===========================
-        try:
-            config = json.loads(args.config)
-        except:
-            config = {}
-        
-        # ===========================
-        # Load data robustly
-        # ===========================
-        with open(args.data_path, "rb") as f:
-            data = pickle.load(f)
-        
-        if hasattr(data, "x") and hasattr(data, "y"):
-            X, y = data.x, data.y
-        elif isinstance(data, dict) and "x" in data and "y" in data:
-            X, y = data["x"], data["y"]
-        else:
-            raise ValueError("Data must have .x/.y or keys 'x'/'y'")
-        
-        # Ensure correct shape [B, C, N, T] for STGNN
-        if X.dim() == 4:
-            X = X.permute(0,3,2,1).contiguous()
-        if y.dim() == 4:
-            y = y.permute(0,3,2,1).contiguous()
-        
-        # ===========================
-        # Create STGNN model
-        # ===========================
-        use_cafo = config.get("use_cafo", False)
-        use_ff = config.get("use_forward_forward", False)
-        training_mode = "forward_forward" if use_ff else "cafo" if use_cafo else "backprop"
-        
-        if STGNN_AVAILABLE:
-            # Ensure seq_in_len and layers prevent negative tensor
-            config['seq_in_len'] = max(config.get('seq_in_len',100), 12)
-            config['layers'] = max(config.get('layers',2), 1)
-            config['num_nodes'] = max(config.get('num_nodes',6),1)
-            try:
-                model = STGNN(config)
-            except Exception as e:
-                print(f"STGNN creation failed: {e}")
-                model = None
-        else:
-            model = None
-        
-        # Fallback mock model
-        if model is None:
-            class MockModel(nn.Module):
-                def __init__(self): super().__init__(); self.linear = nn.Linear(10,1)
-                def forward(self,x): return self.linear(torch.randn(x.size(0),10))
-                def train_forward_forward(self,data,verbose=True): return {'block_results':[{'train_losses':[0.5,0.4,0.3]}]}
-                def train_cafo(self,data,verbose=True): return {'block_results':[{'train_losses':[0.6,0.5,0.4]}]}
-            model = MockModel()
-        
-        # ===========================
-        # Training wrapper
-        # ===========================
-        stg_data = STGNNDataWrapper(X, y, batch_size=config.get("batch_size",32))
-        epoch_loss_data = []
-        try:
-            if use_ff and hasattr(model, "train_forward_forward"):
-                res = model.train_forward_forward(stg_data)
-            elif use_cafo and hasattr(model,"train_cafo"):
-                res = model.train_cafo(stg_data)
-            else:
-                optimizer = optim.Adam(model.parameters(), lr=config.get("learning_rate",0.001))
-                criterion = nn.MSELoss()
-                model.train()
-                optimizer.zero_grad()
-                pred = model(X)
-                loss = criterion(pred, y)
-                loss.backward()
-                optimizer.step()
-                res = {'block_results':[{'train_losses':[loss.item()]}]}
-            for i, b in enumerate(res['block_results']):
-                for j,l in enumerate(b['train_losses']):
-                    epoch_loss_data.append({'block':i+1,'epoch':j+1,'loss':float(l),'training_mode':training_mode})
         except Exception as e:
-            print(f"Training failed: {e}")
-            epoch_loss_data.append({'block':1,'epoch':1,'loss':1.0,'training_mode':training_mode,'error':str(e)})
-        
-        # ===========================
-        # Save outputs
-        # ===========================
+            print("STGNN import failed:", e)
+            STGNN_AVAILABLE = False
+
+        __builtins__.__import__ = original_import
+
+        # =====================================================
+        # ARGUMENTS
+        # =====================================================
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--data_path", required=True)
+        parser.add_argument("--model", required=True)
+        parser.add_argument("--config", required=True)
+        parser.add_argument("--trained_model", required=True)
+        parser.add_argument("--epoch_loss", required=True)
+        args = parser.parse_args()
+
         os.makedirs(os.path.dirname(args.trained_model), exist_ok=True)
         os.makedirs(os.path.dirname(args.epoch_loss), exist_ok=True)
+
+        # =====================================================
+        # LOAD CONFIG
+        # =====================================================
+        config = json.loads(args.config)
+
+        use_cafo = config.get("use_cafo", False)
+        use_ff = config.get("use_forward_forward", False)
+
+        training_mode = (
+            "forward_forward" if use_ff else
+            "cafo" if use_cafo else
+            "backprop"
+        )
+
+        # =====================================================
+        # BULLETPROOF CONFIG FIXES (NEGATIVE TENSOR FIX)
+        # =====================================================
+        config["num_nodes"] = int(config.get("num_nodes", 6))
+        config["seq_in_len"] = max(12, int(config.get("seq_in_len", 100)))
+        config["layers"] = max(1, int(config.get("layers", 2)))
+        config["conv_channels"] = max(8, int(config.get("conv_channels", 16)))
+        config["residual_channels"] = max(8, int(config.get("residual_channels", 16)))
+        config["skip_channels"] = max(8, int(config.get("skip_channels", 32)))
+        config["end_channels"] = max(8, int(config.get("end_channels", 64)))
+        config["in_dim"] = int(config.get("in_dim", 1))
+        config["dropout"] = float(config.get("dropout", 0.1))
+
+        # =====================================================
+        # LOAD DATA (ROBUST – NO .x ASSUMPTION)
+        # =====================================================
+        with open(args.data_path, "rb") as f:
+            data = pickle.load(f)
+
+        X = Y = None
+
+        if hasattr(data, "x") and hasattr(data, "y"):
+            X, Y = data.x, data.y
+
+        elif isinstance(data, dict) and "x" in data and "y" in data:
+            X, Y = data["x"], data["y"]
+
+        else:
+            for attr in vars(data).values():
+                if isinstance(attr, dict) and "x" in attr and "y" in attr:
+                    X, Y = attr["x"], attr["y"]
+                    break
+                if hasattr(attr, "x") and hasattr(attr, "y"):
+                    X, Y = attr.x, attr.y
+                    break
+
+        if X is None or Y is None:
+            raise RuntimeError(
+                f"Unable to find x/y in dataset. Found attributes: {vars(data).keys()}"
+            )
+
+        X = torch.tensor(X) if not torch.is_tensor(X) else X
+        Y = torch.tensor(Y) if not torch.is_tensor(Y) else Y
+
+        # STGNN expects [B, C, N, T]
+        if X.dim() == 4:
+            X = X.permute(0, 3, 2, 1).contiguous()
+        if Y.dim() == 4:
+            Y = Y.permute(0, 3, 2, 1).contiguous()
+
+        print("Data loaded:", X.shape, Y.shape)
+
+        # =====================================================
+        # CREATE MODEL
+        # =====================================================
+        if not STGNN_AVAILABLE:
+            raise RuntimeError("STGNN not available in container")
+
+        model = STGNN(config)
+
+        # =====================================================
+        # TRAINING
+        # =====================================================
+        losses = []
+
+        if training_mode == "forward_forward" and hasattr(model, "train_forward_forward"):
+            result = model.train_forward_forward((X, Y), verbose=True)
+            for b in result["block_results"]:
+                losses.extend(b["train_losses"])
+
+        elif training_mode == "cafo" and hasattr(model, "train_cafo"):
+            result = model.train_cafo((X, Y), verbose=True)
+            for b in result["block_results"]:
+                losses.extend(b["train_losses"])
+
+        else:
+            optimizer = torch.optim.Adam(model.parameters(), lr=config.get("learning_rate", 0.001))
+            criterion = torch.nn.MSELoss()
+            model.train()
+            for _ in range(config.get("epochs", 2)):
+                optimizer.zero_grad()
+                out = model(X)
+                loss = criterion(out, Y)
+                loss.backward()
+                optimizer.step()
+                losses.append(float(loss.item()))
+
+        # =====================================================
+        # SAVE OUTPUTS
+        # =====================================================
         torch.save(model.state_dict(), args.trained_model)
-        with open(args.epoch_loss,'w') as f:
-            json.dump({'loss_history':epoch_loss_data,'training_mode':training_mode},f,indent=2)
+
+        with open(args.epoch_loss, "w") as f:
+            json.dump({
+                "training_mode": training_mode,
+                "losses": losses,
+                "final_loss": losses[-1] if losses else None
+            }, f, indent=2)
+
+        print(" TRAINING COMPLETED SUCCESSFULLY")
+        EOF
     args:
       - --data_path
-      - {inputPath: data_path}
+      - { inputPath: data_path }
       - --model
-      - {inputPath: model}
+      - { inputPath: model }
       - --config
-      - {inputValue: config}
+      - { inputValue: config }
       - --trained_model
-      - {outputPath: trained_model}
+      - { outputPath: trained_model }
       - --epoch_loss
-      - {outputPath: epoch_loss}
+      - { outputPath: epoch_loss }
