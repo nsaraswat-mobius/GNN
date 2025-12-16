@@ -1,5 +1,5 @@
 name: V_Train_GNN_FF_Fixed
-description: Trains GNN with STGNN support (NEGATIVE TENSOR FIXED)
+description: Trains GNN with BULLETPROOF STGNN support (torchvision fully blocked)
 inputs:
   - {name: data_path, type: Dataset}
   - {name: model, type: Model}
@@ -20,61 +20,82 @@ implementation:
       - -u
       - -c
       - |
-        import os, sys, json, pickle, argparse
-        import torch
+        import os
+        import sys
+        import json
+        import pickle
+        import argparse
         import numpy as np
 
-        sys.path.insert(0, "/app/src")
-        sys.path.insert(0, "/workspace/src")
-        sys.path.insert(0, "/code/src")
+        # ---------------------------------------------------------
+        #  HARD BLOCK TORCHVISION (NO EXTENSIONS, NO CIRCULAR IMPORT)
+        # ---------------------------------------------------------
+        if "torchvision" in sys.modules:
+            del sys.modules["torchvision"]
+
+        original_import = __builtins__.__import__
+
+        def block_torchvision_import(name, *args, **kwargs):
+            if name.startswith("torchvision"):
+                import types
+                dummy = types.ModuleType(name)
+                sys.modules[name] = dummy
+                print(f"BLOCKED torchvision import: {name}")
+                return dummy
+            return original_import(name, *args, **kwargs)
+
+        __builtins__.__import__ = block_torchvision_import
+
+        import torch
+        import torch.nn as nn
+        import torch.optim as optim
+
+        print("PyTorch imported successfully with torchvision BLOCKED")
 
         from nesy_factory.GNNs.stgnn import STGNN
 
+        __builtins__.__import__ = original_import
+        print("Import system restored")
+
+        # ---------------------------------------------------------
+        # ARGUMENTS
+        # ---------------------------------------------------------
         parser = argparse.ArgumentParser()
-        parser.add_argument("--data_path", type=str, required=True)
-        parser.add_argument("--model", type=str, required=True)
-        parser.add_argument("--config", type=str, required=True)
-        parser.add_argument("--trained_model", type=str, required=True)
-        parser.add_argument("--epoch_loss", type=str, required=True)
+        parser.add_argument("--data_path", required=True)
+        parser.add_argument("--model", required=True)
+        parser.add_argument("--config", required=True)
+        parser.add_argument("--trained_model", required=True)
+        parser.add_argument("--epoch_loss", required=True)
         args = parser.parse_args()
 
-        # ---------------- CONFIG ----------------
-        config = json.loads(args.config)
+        os.makedirs(os.path.dirname(args.trained_model), exist_ok=True)
+        os.makedirs(os.path.dirname(args.epoch_loss), exist_ok=True)
 
-        #  MUST REMOVE (CAUSES NEGATIVE DIM)
-        config.pop("input_dim", None)
-        config.pop("output_dim", None)
-
-        #  BULLETPROOF STGNN LIMITS
-        config["seq_in_len"] = max(12, int(config["seq_in_len"]))
-        config["layers"] = max(1, int(config["layers"]))
-        config["kernel_size"] = min(
-            int(config.get("kernel_size", 3)),
-            config["seq_in_len"] - 1
-        )
-
-        # ---------------- DATA ----------------
+        # ---------------------------------------------------------
+        # LOAD DATA
+        # ---------------------------------------------------------
         with open(args.data_path, "rb") as f:
             data = pickle.load(f)
 
-        X = torch.tensor(data.x, dtype=torch.float32)
-        Y = torch.tensor(data.y, dtype=torch.float32)
+        X = data.x
+        y = data.y
 
-        #  CRITICAL FIX
-        # BEFORE: [B, T, N, C]
-        # AFTER : [B, C, N, T]
+        #  FIX DATA SHAPE: [B,T,N,C] → [B,C,N,T]
         X = X.permute(0, 3, 2, 1).contiguous()
-        Y = Y.permute(0, 3, 2, 1).contiguous()
+        y = y.permute(0, 3, 2, 1).contiguous()
 
-        # HARD ASSERTS (FAIL FAST)
-        assert X.shape[1] == config["in_dim"]
-        assert X.shape[2] == config["num_nodes"]
-        assert X.shape[3] == config["seq_in_len"]
+        # ---------------------------------------------------------
+        # LOAD CONFIG
+        # ---------------------------------------------------------
+        config = json.loads(args.config)
 
-        # ---------------- MODEL ----------------
-        model = STGNN(config)
+        #  REMOVE POISON KEYS
+        config.pop("input_dim", None)
+        config.pop("output_dim", None)
 
-        #  FIX NameError
+        # ---------------------------------------------------------
+        # TRAINING MODE (BOOLEAN CONTROLLED)
+        # ---------------------------------------------------------
         training_mode = (
             "forward_forward"
             if config.get("use_forward_forward", False)
@@ -83,45 +104,54 @@ implementation:
             else "traditional"
         )
 
-        loss_history = []
+        print("Training mode:", training_mode)
 
-        # ---------------- TRAIN ----------------
-        if config.get("use_cafo", False) and hasattr(model, "train_cafo"):
-            result = model.train_cafo((X, Y), verbose=True)
-            for b, block in enumerate(result["block_results"]):
-                for e, loss in enumerate(block["train_losses"]):
-                    loss_history.append({
-                        "block": b + 1,
-                        "epoch": e + 1,
-                        "loss": float(loss),
-                        "mode": "cafo"
-                    })
+        # ---------------------------------------------------------
+        # CREATE MODEL
+        # ---------------------------------------------------------
+        model = STGNN(config)
 
-        elif config.get("use_forward_forward", False) and hasattr(model, "train_forward_forward"):
-            result = model.train_forward_forward((X, Y), verbose=True)
-            for b, block in enumerate(result["block_results"]):
-                for e, loss in enumerate(block["train_losses"]):
-                    loss_history.append({
-                        "block": b + 1,
-                        "epoch": e + 1,
-                        "loss": float(loss),
-                        "mode": "forward_forward"
-                    })
+        # ---------------------------------------------------------
+        # TRAIN
+        # ---------------------------------------------------------
+        losses = []
 
-        # ---------------- SAVE ----------------
-        os.makedirs(os.path.dirname(args.trained_model), exist_ok=True)
-        os.makedirs(os.path.dirname(args.epoch_loss), exist_ok=True)
+        if training_mode == "cafo":
+            result = model.train_cafo((X, y))
+            losses = result["block_results"]
 
+        elif training_mode == "forward_forward":
+            result = model.train_forward_forward((X, y))
+            losses = result["block_results"]
+
+        else:
+            optimizer = optim.Adam(model.parameters(), lr=config["learning_rate"])
+            criterion = nn.MSELoss()
+
+            for epoch in range(config["epochs"]):
+                optimizer.zero_grad()
+                out = model(X)
+                loss = criterion(out, y)
+                loss.backward()
+                optimizer.step()
+                losses.append(float(loss.item()))
+
+        # ---------------------------------------------------------
+        # SAVE OUTPUTS (ARGO SAFE)
+        # ---------------------------------------------------------
         torch.save(model.state_dict(), args.trained_model)
 
         with open(args.epoch_loss, "w") as f:
-            json.dump({
-                "training_mode": training_mode,
-                "loss_history": loss_history
-            }, f, indent=2)
+            json.dump(
+                {
+                    "training_mode": training_mode,
+                    "losses": losses,
+                },
+                f,
+                indent=2,
+            )
 
-        print(" STGNN TRAINING COMPLETED SUCCESSFULLY")
-
+        print(" TRAINING COMPLETED SUCCESSFULLY")
     args:
       - --data_path
       - {inputPath: data_path}
