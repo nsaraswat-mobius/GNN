@@ -1,5 +1,5 @@
 name: V_Train_GNN_FF_Fixed
-description: Trains GNN with BULLETPROOF STGNN support (torchvision fully blocked)
+description: Trains GNN with BULLETPROOF STGNN support 
 inputs:
   - {name: data_path, type: Dataset}
   - {name: model, type: Model}
