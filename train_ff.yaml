@@ -1,12 +1,14 @@
-name: V_Train_GNN_FF_Fixed
-description: Trains STGNN with CAFO / FF / Backprop (torchvision blocked, pickle-safe)
+name: Train_STGNN_CAFO_FF_BP
+description: STGNN training brick 
+
 inputs:
-  - {name: data_path, type: Dataset}
-  - {name: model, type: Model}
-  - {name: config, type: String}
+  - { name: data_path, type: Dataset }
+  - { name: model, type: Model }
+  - { name: config, type: String }
+
 outputs:
-  - {name: trained_model, type: Model}
-  - {name: epoch_loss, type: String}
+  - { name: trained_model, type: Model }
+  - { name: epoch_loss, type: String }
 
 implementation:
   container:
@@ -27,24 +29,27 @@ implementation:
         import argparse
         import numpy as np
 
-        # =================================================
-        #  PICKLE SAFETY FIX (CRITICAL)
-        # =================================================
+        # =====================================================
+        #  PICKLE COMPATIBILITY FIX (CRITICAL)
+        # =====================================================
         class DataWrapper:
             pass
 
         class DataLoaderM:
             pass
 
-        # =================================================
-        #  HARD BLOCK TORCHVISION
-        # =================================================
+        class StandardScaler:
+            pass
+
+        # =====================================================
+        #  HARD BLOCK TORCHVISION (CIRCULAR IMPORT FIX)
+        # =====================================================
         if "torchvision" in sys.modules:
             del sys.modules["torchvision"]
 
         original_import = __builtins__.__import__
 
-        def block_torchvision_import(name, *args, **kwargs):
+        def block_torchvision(name, *args, **kwargs):
             if name.startswith("torchvision"):
                 import types
                 dummy = types.ModuleType(name)
@@ -53,22 +58,22 @@ implementation:
                 return dummy
             return original_import(name, *args, **kwargs)
 
-        __builtins__.__import__ = block_torchvision_import
+        __builtins__.__import__ = block_torchvision
 
         import torch
         import torch.nn as nn
         import torch.optim as optim
 
-        print("PyTorch imported with torchvision BLOCKED")
+        print(" PyTorch loaded with torchvision BLOCKED")
 
         from nesy_factory.GNNs.stgnn import STGNN
 
         __builtins__.__import__ = original_import
-        print("Import system restored")
+        print(" Import system restored")
 
-        # =================================================
+        # =====================================================
         # ARGUMENTS
-        # =================================================
+        # =====================================================
         parser = argparse.ArgumentParser()
         parser.add_argument("--data_path", required=True)
         parser.add_argument("--model", required=True)
@@ -80,58 +85,58 @@ implementation:
         os.makedirs(os.path.dirname(args.trained_model), exist_ok=True)
         os.makedirs(os.path.dirname(args.epoch_loss), exist_ok=True)
 
-        # =================================================
-        # LOAD DATA
-        # =================================================
+        # =====================================================
+        # LOAD DATA (PICKLE SAFE)
+        # =====================================================
         with open(args.data_path, "rb") as f:
             data = pickle.load(f)
 
         X = data.x
         y = data.y
 
-        #  DIMENSION FIX: [B,T,N,C] → [B,C,N,T]
+        # REQUIRED FOR STGNN: [B, T, N, C] → [B, C, N, T]
         X = X.permute(0, 3, 2, 1).contiguous()
         y = y.permute(0, 3, 2, 1).contiguous()
 
-        # =================================================
+        # =====================================================
         # LOAD CONFIG
-        # =================================================
+        # =====================================================
         config = json.loads(args.config)
 
-        #  REMOVE INVALID KEYS
+        #  REMOVE INVALID KEYS (CAUSE NEGATIVE TENSOR)
         config.pop("input_dim", None)
         config.pop("output_dim", None)
 
-        # =================================================
+        # =====================================================
         # TRAINING MODE (BOOLEAN CONTROL)
-        # =================================================
+        # =====================================================
         training_mode = (
             "forward_forward"
             if config.get("use_forward_forward", False)
             else "cafo"
             if config.get("use_cafo", False)
-            else "traditional"
+            else "backprop"
         )
 
-        print("Training mode:", training_mode)
+        print(" Training mode:", training_mode)
 
-        # =================================================
+        # =====================================================
         # CREATE MODEL
-        # =================================================
+        # =====================================================
         model = STGNN(config)
 
-        # =================================================
+        # =====================================================
         # TRAIN
-        # =================================================
+        # =====================================================
         loss_log = []
 
         if training_mode == "cafo":
             result = model.train_cafo((X, y))
-            loss_log = result["block_results"]
+            loss_log = result.get("block_results", [])
 
         elif training_mode == "forward_forward":
             result = model.train_forward_forward((X, y))
-            loss_log = result["block_results"]
+            loss_log = result.get("block_results", [])
 
         else:
             optimizer = optim.Adam(
@@ -148,9 +153,9 @@ implementation:
                 optimizer.step()
                 loss_log.append(float(loss.item()))
 
-        # =================================================
+        # =====================================================
         # SAVE OUTPUTS (ARGO SAFE)
-        # =================================================
+        # =====================================================
         torch.save(model.state_dict(), args.trained_model)
 
         with open(args.epoch_loss, "w") as f:
@@ -166,12 +171,12 @@ implementation:
         print(" TRAINING COMPLETED SUCCESSFULLY")
     args:
       - --data_path
-      - {inputPath: data_path}
+      - { inputPath: data_path }
       - --model
-      - {inputPath: model}
+      - { inputPath: model }
       - --config
-      - {inputValue: config}
+      - { inputValue: config }
       - --trained_model
-      - {outputPath: trained_model}
+      - { outputPath: trained_model }
       - --epoch_loss
-      - {outputPath: epoch_loss}
+      - { outputPath: epoch_loss }
