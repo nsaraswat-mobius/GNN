@@ -1,5 +1,5 @@
 name: V_Train_GNN_FF_Fixed
-description: Trains GNN with BULLETPROOF STGNN support (torchvision blocked)
+description: Trains STGNN with CAFO / FF / Backprop (torchvision blocked, pickle-safe)
 inputs:
   - {name: data_path, type: Dataset}
   - {name: model, type: Model}
@@ -27,15 +27,18 @@ implementation:
         import argparse
         import numpy as np
 
-        # -------------------------------------------------
-        #  FIX PICKLE ERROR (DataWrapper)
-        # -------------------------------------------------
+        # =================================================
+        #  PICKLE SAFETY FIX (CRITICAL)
+        # =================================================
         class DataWrapper:
             pass
 
-        # -------------------------------------------------
+        class DataLoaderM:
+            pass
+
+        # =================================================
         #  HARD BLOCK TORCHVISION
-        # -------------------------------------------------
+        # =================================================
         if "torchvision" in sys.modules:
             del sys.modules["torchvision"]
 
@@ -56,16 +59,16 @@ implementation:
         import torch.nn as nn
         import torch.optim as optim
 
-        print("PyTorch imported successfully with torchvision BLOCKED")
+        print("PyTorch imported with torchvision BLOCKED")
 
         from nesy_factory.GNNs.stgnn import STGNN
 
         __builtins__.__import__ = original_import
         print("Import system restored")
 
-        # -------------------------------------------------
+        # =================================================
         # ARGUMENTS
-        # -------------------------------------------------
+        # =================================================
         parser = argparse.ArgumentParser()
         parser.add_argument("--data_path", required=True)
         parser.add_argument("--model", required=True)
@@ -77,31 +80,31 @@ implementation:
         os.makedirs(os.path.dirname(args.trained_model), exist_ok=True)
         os.makedirs(os.path.dirname(args.epoch_loss), exist_ok=True)
 
-        # -------------------------------------------------
+        # =================================================
         # LOAD DATA
-        # -------------------------------------------------
+        # =================================================
         with open(args.data_path, "rb") as f:
             data = pickle.load(f)
 
         X = data.x
         y = data.y
 
-        #  CRITICAL FIX: [B,T,N,C] → [B,C,N,T]
+        #  DIMENSION FIX: [B,T,N,C] → [B,C,N,T]
         X = X.permute(0, 3, 2, 1).contiguous()
         y = y.permute(0, 3, 2, 1).contiguous()
 
-        # -------------------------------------------------
+        # =================================================
         # LOAD CONFIG
-        # -------------------------------------------------
+        # =================================================
         config = json.loads(args.config)
 
-        #  REMOVE POISON KEYS
+        #  REMOVE INVALID KEYS
         config.pop("input_dim", None)
         config.pop("output_dim", None)
 
-        # -------------------------------------------------
-        # TRAINING MODE (BOOLEAN CONTROLLED)
-        # -------------------------------------------------
+        # =================================================
+        # TRAINING MODE (BOOLEAN CONTROL)
+        # =================================================
         training_mode = (
             "forward_forward"
             if config.get("use_forward_forward", False)
@@ -112,14 +115,14 @@ implementation:
 
         print("Training mode:", training_mode)
 
-        # -------------------------------------------------
+        # =================================================
         # CREATE MODEL
-        # -------------------------------------------------
+        # =================================================
         model = STGNN(config)
 
-        # -------------------------------------------------
+        # =================================================
         # TRAIN
-        # -------------------------------------------------
+        # =================================================
         loss_log = []
 
         if training_mode == "cafo":
@@ -145,9 +148,9 @@ implementation:
                 optimizer.step()
                 loss_log.append(float(loss.item()))
 
-        # -------------------------------------------------
+        # =================================================
         # SAVE OUTPUTS (ARGO SAFE)
-        # -------------------------------------------------
+        # =================================================
         torch.save(model.state_dict(), args.trained_model)
 
         with open(args.epoch_loss, "w") as f:
