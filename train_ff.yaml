@@ -1,326 +1,372 @@
 name: V_Train_GNN_FF_Fixed
 description: Trains STGNN with Backprop / CAFO / Forward-Forward (Bulletproof)
 inputs:
-  - {name: data_path, type: Dataset}           
-  - {name: model, type: Model}            
-  - {name: config, type: String}          
+  - {name: data_path, type: Dataset}
+  - {name: model, type: Model}
+  - {name: config, type: String}
 outputs:
-  - {name: trained_model, type: Model}     
-  - {name: epoch_loss, type: String}       
+  - {name: trained_model, type: Model}
+  - {name: epoch_loss, type: String}
 implementation:
-  container:
-    image: gurpreetgandhi/nesy-factory:v38-gpu
-    command:
-      - sh
-      - -c
-      - |
-        exec "$0" "$@"
-      - python3
-      - -u
-      - -c
-      - |
-        import os, sys, json, pickle, argparse
-        import torch
-        import numpy as np
+  container:
+    image: gurpreetgandhi/nesy-factory:v38-gpu
+    command:
+      - sh
+      - -c
+      - |
+        exec "$0" "$@"
+      - python3
+      - -u
+      - -c
+      - |
+        import os, sys, json, pickle, argparse
+        import torch
+        import numpy as np
+        import torch.nn.functional as F # <-- Added F for padding
 
-        # =====================================================
-        # BLOCK TORCHVISION (circular import fix)
-        # =====================================================
-        original_import = __builtins__.__import__
-        def block_torchvision(name, *args, **kwargs):
-            if "torchvision" in name:
-                import types
-                dummy = types.ModuleType(name)
-                sys.modules[name] = dummy
-                return dummy
-            return original_import(name, *args, **kwargs)
-        __builtins__.__import__ = block_torchvision
+        # =====================================================
+        # BLOCK TORCHVISION (circular import fix)
+        # =====================================================
+        original_import = __builtins__.__import__
+        def block_torchvision(name, *args, **kwargs):
+            if "torchvision" in name:
+                import types
+                dummy = types.ModuleType(name)
+                sys.modules[name] = dummy
+                return dummy
+            return original_import(name, *args, **kwargs)
+        __builtins__.__import__ = block_torchvision
 
-        from nesy_factory.GNNs import create_model
-        import nesy_factory.GNNs.stgnn as stgnn_module
-        
-        # Restore original import after loading nesy_factory
-        __builtins__.__import__ = original_import
-        
-        # MONKEY PATCH LayerNorm to fix negative dimension bug
-        original_layernorm_init = stgnn_module.LayerNorm.__init__
-        def patched_layernorm_init(self, normalized_shape, eps=1e-05, elementwise_affine=True):
-            # Fix negative dimensions in normalized_shape
-            if isinstance(normalized_shape, (list, tuple)):
-                # Only keep positive dimensions, fall back to channel-only
-                fixed_shape = tuple(d for d in normalized_shape if d > 0)
-                if not fixed_shape or len(fixed_shape) > 1:
-                    # Use only first positive dimension (residual_channels)
-                    fixed_shape = (normalized_shape[0],) if normalized_shape[0] > 0 else (16,)
-                print(f" LayerNorm fix: {normalized_shape} -> {fixed_shape}")
-                normalized_shape = fixed_shape
-            original_layernorm_init(self, normalized_shape, eps, elementwise_affine)
-        
-        stgnn_module.LayerNorm.__init__ = patched_layernorm_init
-        print(" LayerNorm monkey-patched successfully!")
-        
-        STGNN = stgnn_module.STGNN
-        
-        class DataWrapper:
-          def __init__(self, data_dict):
-              self.__dict__.update(data_dict)
+        from nesy_factory.GNNs import create_model
+        import nesy_factory.GNNs.stgnn as stgnn_module
 
-        class StandardScaler():
-            def __init__(self, mean, std):
-                self.mean = mean
-                self.std = std
-            def transform(self, data):
-                return (data - self.mean) / self.std
-            def inverse_transform(self, data):
-                return (data * self.std) + self.mean
-        
-        class DataLoaderM(object):
-            def __init__(self, xs, ys, batch_size, pad_with_last_sample=True):
-                self.batch_size = batch_size
-                self.current_ind = 0
-                if pad_with_last_sample:
-                    num_padding = (batch_size - (len(xs) % batch_size)) % batch_size
-                    x_padding = np.repeat(xs[-1:], num_padding, axis=0)
-                    y_padding = np.repeat(ys[-1:], num_padding, axis=0)
-                    xs = np.concatenate([xs, x_padding], axis=0)
-                    ys = np.concatenate([ys, y_padding], axis=0)
-                self.size = len(xs)
-                self.num_batch = int(self.size // self.batch_size)
-                self.xs = xs
-                self.ys = ys
-        
-            def shuffle(self):
-                permutation = np.random.permutation(self.size)
-                xs, ys = self.xs[permutation], self.ys[permutation]
-                self.xs = xs
-                self.ys = ys
-        
-            def get_iterator(self):
-                self.current_ind = 0
-                def _wrapper():
-                    while self.current_ind < self.num_batch:
-                        start_ind = self.batch_size * self.current_ind
-                        end_ind = min(self.size, self.batch_size * (self.current_ind + 1))
-                        x_i = self.xs[start_ind: end_ind, ...]
-                        y_i = self.ys[start_ind: end_ind, ...]
-                        yield (x_i, y_i)
-                        self.current_ind += 1
-                return _wrapper()
+        # Restore original import after loading nesy_factory
+        __builtins__.__import__ = original_import
 
-        class STGNNDataWrapper:
-            def __init__(self, x_data, y_data, batch_size=32):
-                self.x_data = x_data
-                self.y_data = y_data
-                self.scaler = StandardScaler(x_data.mean(), x_data.std())
-                self.train_loader = DataLoaderM(x_data.numpy(), y_data.numpy(), batch_size)
+        # MONKEY PATCH LayerNorm to fix negative dimension bug
+        original_layernorm_init = stgnn_module.LayerNorm.__init__
+        def patched_layernorm_init(self, normalized_shape, eps=1e-05, elementwise_affine=True):
+            # Fix negative dimensions in normalized_shape
+            if isinstance(normalized_shape, (list, tuple)):
+                # Only keep positive dimensions, fall back to channel-only
+                fixed_shape = tuple(d for d in normalized_shape if d > 0)
+                if not fixed_shape or len(fixed_shape) > 1:
+                    # Use only first positive dimension (residual_channels)
+                    # Ensure we don't try to index if normalized_shape is empty
+                    default_shape = normalized_shape[0] if normalized_shape and normalized_shape[0] > 0 else 16
+                    fixed_shape = (default_shape,)
+                print(f" LayerNorm fix: {normalized_shape} -> {fixed_shape}")
+                normalized_shape = fixed_shape
+            original_layernorm_init(self, normalized_shape, eps, elementwise_affine)
 
-        # Parse arguments
-        parser = argparse.ArgumentParser()
-        parser.add_argument('--data_path', type=str, required=True)
-        parser.add_argument('--model', type=str, required=True)
-        parser.add_argument('--config', type=str, required=True)
-        parser.add_argument('--trained_model', type=str, required=True)
-        parser.add_argument('--epoch_loss', type=str, required=True)
-        args = parser.parse_args()
+        stgnn_module.LayerNorm.__init__ = patched_layernorm_init
+        print(" LayerNorm monkey-patched successfully!")
 
-        print(f"Data path: {args.data_path}")
-        print(f"Model path: {args.model}")
-        print(f"Config: {args.config}")
-        print(f"Output path: {args.trained_model}")
-        
-        # Load data
-        try:
-            with open(args.data_path, "rb") as f:
-                data = pickle.load(f)
-            print(f"Successfully loaded data. Type: {type(data)}")
-            
-            # Handle different data formats
-            X = Y = None
-            if hasattr(data, "x") and hasattr(data, "y"):
-                X, Y = data.x, data.y
-                print("Found data.x and data.y")
-            elif hasattr(data, "x_train") and hasattr(data, "y_train"):
-                X, Y = data.x_train, data.y_train
-                print("Found data.x_train and data.y_train")
-            else:
-                print(f"Available attributes: {list(vars(data).keys())}")
-                raise ValueError("Could not find x/y or x_train/y_train in data")
-                
-            # Convert to tensors if needed
-            if not isinstance(X, torch.Tensor):
-                X = torch.tensor(X, dtype=torch.float32)
-            if not isinstance(Y, torch.Tensor):
-                Y = torch.tensor(Y, dtype=torch.float32)
-                
-            print(f"Data shapes: X={X.shape}, Y={Y.shape}")
-            
-        except Exception as e:
-            print(f"Error loading data: {e}")
-            exit(1)
-            
-        print("Loading config...")
-        try: 
-            config = json.loads(args.config)
-        except: 
-            with open(args.config) as f:
-                config = json.load(f)
-        print(f"Config loaded: {config}")
+        STGNN = stgnn_module.STGNN
 
-        # Get training mode from config
-        use_cafo = config.get('use_cafo', False)
-        use_forward_forward = config.get('use_forward_forward', False)
-        
-        if use_cafo:
-            training_mode = 'cafo'
-        elif use_forward_forward:
-            training_mode = 'forward_forward'
-        else:
-            training_mode = 'backprop'
-            
-        print(f"Training mode: {training_mode}")
+        class DataWrapper:
+          def __init__(self, data_dict):
+              self.__dict__.update(data_dict)
 
-        # NEGATIVE TENSOR FIX: Validate config parameters (backup safety)
-        config['num_nodes'] = max(1, config.get('num_nodes', 6))
-        config['seq_in_len'] = max(12, config.get('seq_in_len', 100))
-        config['layers'] = max(1, config.get('layers', 2))
-        config['conv_channels'] = max(8, config.get('conv_channels', 16))
-        config['residual_channels'] = max(8, config.get('residual_channels', 16))
-        config['skip_channels'] = max(8, config.get('skip_channels', 32))
-        config['end_channels'] = max(8, config.get('end_channels', 64))
-        config['dilation_exponential'] = max(1, config.get('dilation_exponential', 2))
-        
-        # Additional safety checks
-        config['seq_length'] = config.get('seq_length', config['seq_in_len'])
-        config['receptive_field'] = max(config['seq_in_len'], config.get('receptive_field', config['seq_in_len']))
-        
-        print(f" Config pre-validated: num_nodes={config['num_nodes']}, seq_in_len={config['seq_in_len']}")
+        class StandardScaler():
+            def __init__(self, mean, std):
+                self.mean = mean
+                self.std = std
+            def transform(self, data):
+                return (data - self.mean) / self.std
+            def inverse_transform(self, data):
+                return (data * self.std) + self.mean
 
-        print("Creating model...")
-        model_name = config.get('model_name', 'stgnn')
-        
-        # Create fresh model with validated config
-        if model_name.lower() == 'stgnn':
-            model = STGNN(config)
-            print("Created STGNN model with patched LayerNorm")
-        else:
-            model = create_model(model_name, config)
-            print(f"Created {model_name} model")
-            
-        # Try to load pre-trained weights if available
-        try:
-            if os.path.exists(args.model):
-                model.load_state_dict(torch.load(args.model, map_location=torch.device('cpu')))
-                print("Loaded pre-trained model weights")
-            else:
-                print("No pre-trained model found, using fresh model")
-        except Exception as e:
-            print(f"Could not load pre-trained weights: {e}")
-            print("Using fresh model")
+        class DataLoaderM(object):
+            def __init__(self, xs, ys, batch_size, pad_with_last_sample=True):
+                self.batch_size = batch_size
+                self.current_ind = 0
+                if pad_with_last_sample:
+                    num_padding = (batch_size - (len(xs) % batch_size)) % batch_size
+                    x_padding = np.repeat(xs[-1:], num_padding, axis=0)
+                    y_padding = np.repeat(ys[-1:], num_padding, axis=0)
+                    xs = np.concatenate([xs, x_padding], axis=0)
+                    ys = np.concatenate([ys, y_padding], axis=0)
+                self.size = len(xs)
+                self.num_batch = int(self.size // self.batch_size)
+                self.xs = xs
+                self.ys = ys
 
-        epochs = config.get('epochs', 100)
-        print(f"Training for {epochs} epochs using {training_mode}")
-        print("Starting Model Training")
-        
-        epoch_loss_data = []
-        
-        try:
-            if training_mode == 'cafo' and hasattr(model, 'train_cafo'):
-                print("Starting CAFO training...")
-                stgnn_data = STGNNDataWrapper(X, Y, batch_size=config.get('batch_size', 32))
-                result = model.train_cafo(stgnn_data, verbose=True)
-                
-                for i, block_result in enumerate(result['block_results']):
-                    for epoch, loss in enumerate(block_result['train_losses']):
-                        epoch_loss_data.append({
-                            'block': i + 1,
-                            'epoch': epoch + 1,
-                            'loss': float(loss),
-                            'mode': 'cafo'
-                        })
-                print("CAFO training completed!")
-                
-            elif training_mode == 'forward_forward' and hasattr(model, 'train_forward_forward'):
-                print("Starting Forward-Forward training...")
-                stgnn_data = STGNNDataWrapper(X, Y, batch_size=config.get('batch_size', 32))
-                result = model.train_forward_forward(stgnn_data, verbose=True)
-                
-                for i, block_result in enumerate(result['block_results']):
-                    for epoch, loss in enumerate(block_result['train_losses']):
-                        epoch_loss_data.append({
-                            'block': i + 1,
-                            'epoch': epoch + 1,
-                            'loss': float(loss),
-                            'mode': 'forward_forward'
-                        })
-                print("Forward-Forward training completed!")
-                
-            else:
-                print("Starting traditional backprop training...")
-                for epoch in range(epochs):
-                    if hasattr(model, 'train_step') and hasattr(data, 'train_mask'):
-                        # Use existing train_step method if available
-                        loss = model.train_step(data, data.train_mask)
-                    else:
-                        # Traditional PyTorch training loop
-                        model.train()
-                        optimizer = torch.optim.Adam(model.parameters(), lr=config.get('learning_rate', 0.001))
-                        criterion = torch.nn.MSELoss()
-                        
-                        optimizer.zero_grad()
-                        output = model(X)
-                        loss = criterion(output, Y)
-                        loss.backward()
-                        optimizer.step()
-                        loss = loss.item()
-                    
-                    print(f"Epoch {epoch + 1} | Loss: {loss}")
-                    epoch_loss_data.append({'epoch': epoch + 1, 'loss': float(loss), 'mode': 'backprop'})
-                    
-                print("Traditional training completed!")
-                
-        except Exception as e:
-            print(f"Training error: {e}")
-            # Add fallback loss data
-            epoch_loss_data.append({'epoch': 1, 'loss': 1.0, 'mode': 'error', 'error': str(e)})
+            def shuffle(self):
+                permutation = np.random.permutation(self.size)
+                xs, ys = self.xs[permutation], self.ys[permutation]
+                self.xs = xs
+                self.ys = ys
 
-        print("Finished Model Training")
-        
-        # Save epoch loss
-        output_dir_epoch_loss = os.path.dirname(args.epoch_loss)
-        if output_dir_epoch_loss and not os.path.exists(output_dir_epoch_loss):
-            os.makedirs(output_dir_epoch_loss, exist_ok=True)
-        with open(args.epoch_loss, 'w') as f:
-            f.write(json.dumps({
-                'training_mode': training_mode,
-                'epoch_losses': epoch_loss_data,
-                'total_epochs': len(epoch_loss_data),
-                'final_loss': epoch_loss_data[-1]['loss'] if epoch_loss_data else None
-            }))
-        
-        # Save trained model
-        print("Saving trained model...")
-        try:
-            output_dir = os.path.dirname(args.trained_model)
-            if output_dir and not os.path.exists(output_dir):
-                os.makedirs(output_dir, exist_ok=True)
-                print(f"Created directory: {output_dir}")
-            
-            torch.save(model.state_dict(), args.trained_model)
-            print(f"Saved trained model to {args.trained_model}")
-        except Exception as e:
-            print(f"Error saving trained model: {e}")
-            # Create empty file to prevent workflow failure
-            torch.save({}, args.trained_model)
-            
-        print("Training workflow completed successfully!")
-    args:
-      - --data_path
-      - {inputPath: data_path}
-      - --model
-      - {inputPath: model}
-      - --config
-      - {inputValue: config}
-      - --trained_model
-      - {outputPath: trained_model}
-      - --epoch_loss
-      - {outputPath: epoch_loss}
+            def get_iterator(self):
+                self.current_ind = 0
+                def _wrapper():
+                    while self.current_ind < self.num_batch:
+                        start_ind = self.batch_size * self.current_ind
+                        end_ind = min(self.size, self.batch_size * (self.current_ind + 1))
+                        x_i = self.xs[start_ind: end_ind, ...]
+                        y_i = self.ys[start_ind: end_ind, ...]
+                        yield (x_i, y_i)
+                        self.current_ind += 1
+                return _wrapper()
+
+        class STGNNDataWrapper:
+            def __init__(self, x_data, y_data, batch_size=32):
+                self.x_data = x_data
+                self.y_data = y_data
+                self.scaler = StandardScaler(x_data.mean(), x_data.std())
+                self.train_loader = DataLoaderM(x_data.numpy(), y_data.numpy(), batch_size)
+
+        # Parse arguments
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--data_path', type=str, required=True)
+        parser.add_argument('--model', type=str, required=True)
+        parser.add_argument('--config', type=str, required=True)
+        parser.add_argument('--trained_model', type=str, required=True)
+        parser.add_argument('--epoch_loss', type=str, required=True)
+        args = parser.parse_args()
+
+        print(f"Data path: {args.data_path}")
+        print(f"Model path: {args.model}")
+        print(f"Config: {args.config}")
+        print(f"Output path: {args.trained_model}")
+
+        # Load data
+        try:
+            with open(args.data_path, "rb") as f:
+                data = pickle.load(f)
+            print(f"Successfully loaded data. Type: {type(data)}")
+
+            # Handle different data formats
+            X = Y = None
+            if hasattr(data, "x") and hasattr(data, "y"):
+                X, Y = data.x, data.y
+                print("Found data.x and data.y")
+            elif hasattr(data, "x_train") and hasattr(data, "y_train"):
+                X, Y = data.x_train, data.y_train
+                print("Found data.x_train and data.y_train")
+            else:
+                print(f"Available attributes: {list(vars(data).keys())}")
+                raise ValueError("Could not find x/y or x_train/y_train in data")
+
+            # Convert to tensors if needed
+            if not isinstance(X, torch.Tensor):
+                X = torch.tensor(X, dtype=torch.float32)
+            if not isinstance(Y, torch.Tensor):
+                Y = torch.tensor(Y, dtype=torch.float32)
+
+            print(f"Initial Data shapes: X={X.shape}, Y={Y.shape}")
+
+        except Exception as e:
+            print(f"Error loading data: {e}")
+            exit(1)
+
+        print("Loading config...")
+        try:
+            config = json.loads(args.config)
+        except:
+            with open(args.config) as f:
+                config = json.load(f)
+        print(f"Config loaded: {config}")
+
+        # Get training mode from config
+        use_cafo = config.get('use_cafo', False)
+        use_forward_forward = config.get('use_forward_forward', False)
+
+        if use_cafo:
+            training_mode = 'cafo'
+        elif use_forward_forward:
+            training_mode = 'forward_forward'
+        else:
+            training_mode = 'backprop'
+
+        print(f"Training mode: {training_mode}")
+
+        # =================================================================
+        # CRITICAL FIX: RECEPTIVE FIELD CHECK & PADDING 🛠️
+        # =================================================================
+        layers = config.get('layers', 2)
+        dilation_exponential = config.get('dilation_exponential', 2)
+        kernel_size = config.get('kernel_size', 2) # Default STGNN kernel size is 2
+
+        # Calculate the minimum required receptive field size (R)
+        # R = 1 + sum( (k-1) * d^i ) for i=0 to L-1
+        # A common calculation for d=2, k=2 is R = 2^L 
+        if dilation_exponential > 1 and kernel_size > 1:
+            R = 1 + (kernel_size - 1) * ((dilation_exponential**layers - 1) // (dilation_exponential - 1))
+        else:
+            R = layers * (kernel_size - 1) + 1
+        
+        min_seq_len = R + config.get('seq_out_len', 1) 
+        current_seq_len = X.shape[-1] # Assuming time is the last dimension
+
+        if current_seq_len < min_seq_len:
+            padding_needed = min_seq_len - current_seq_len
+            
+            # Pad the last dimension (temporal dimension) with zeros
+            # (pad_left, pad_right) for the last dimension
+            X = F.pad(X, (0, padding_needed)) 
+            
+            print(f" Insufficient sequence length: {current_seq_len}. Min required: {min_seq_len}")
+            print(f" Padded X with {padding_needed} steps. New shape: {X.shape}")
+
+        # Update config to reflect the new, fixed sequence length
+        config['seq_in_len'] = X.shape[-1]
+        config['receptive_field'] = max(config['seq_in_len'], R)
+        
+        # General config validation (less critical after padding fix)
+        config['num_nodes'] = max(1, config.get('num_nodes', 6))
+        config['layers'] = max(1, config.get('layers', 2))
+        config['conv_channels'] = max(8, config.get('conv_channels', 16))
+        config['residual_channels'] = max(8, config.get('residual_channels', 16))
+        config['skip_channels'] = max(8, config.get('skip_channels', 32))
+        config['end_channels'] = max(8, config.get('end_channels', 64))
+        config['dilation_exponential'] = max(1, config.get('dilation_exponential', 2))
+        config['seq_length'] = config.get('seq_length', config['seq_in_len'])
+
+        print(f" Config pre-validated: num_nodes={config['num_nodes']}, final seq_in_len={config['seq_in_len']}")
+        # =================================================================
+
+        print("Creating model...")
+        model_name = config.get('model_name', 'stgnn')
+
+        # Create fresh model with validated config
+        if model_name.lower() == 'stgnn':
+            model = STGNN(config)
+            print("Created STGNN model with patched LayerNorm")
+        else:
+            model = create_model(model_name, config)
+            print(f"Created {model_name} model")
+
+        # Try to load pre-trained weights if available
+        try:
+            if os.path.exists(args.model):
+                model.load_state_dict(torch.load(args.model, map_location=torch.device('cpu')))
+                print("Loaded pre-trained model weights")
+            else:
+                print("No pre-trained model found, using fresh model")
+        except Exception as e:
+            print(f"Could not load pre-trained weights: {e}")
+            print("Using fresh model")
+
+        epochs = config.get('epochs', 100)
+        print(f"Training for {epochs} epochs using {training_mode}")
+        print("Starting Model Training")
+
+        epoch_loss_data = []
+
+        try:
+            if training_mode == 'cafo' and hasattr(model, 'train_cafo'):
+                print("Starting CAFO training...")
+                stgnn_data = STGNNDataWrapper(X, Y, batch_size=config.get('batch_size', 32))
+                result = model.train_cafo(stgnn_data, verbose=True)
+
+                for i, block_result in enumerate(result['block_results']):
+                    for epoch, loss in enumerate(block_result['train_losses']):
+                        epoch_loss_data.append({
+                            'block': i + 1,
+                            'epoch': epoch + 1,
+                            'loss': float(loss),
+                            'mode': 'cafo'
+                        })
+                print("CAFO training completed!")
+
+            elif training_mode == 'forward_forward' and hasattr(model, 'train_forward_forward'):
+                print("Starting Forward-Forward training...")
+                stgnn_data = STGNNDataWrapper(X, Y, batch_size=config.get('batch_size', 32))
+                result = model.train_forward_forward(stgnn_data, verbose=True)
+
+                for i, block_result in enumerate(result['block_results']):
+                    for epoch, loss in enumerate(block_result['train_losses']):
+                        epoch_loss_data.append({
+                            'block': i + 1,
+                            'epoch': epoch + 1,
+                            'loss': float(loss),
+                            'mode': 'forward_forward'
+                        })
+                print("Forward-Forward training completed!")
+
+            else:
+                print("Starting traditional backprop training...")
+                for epoch in range(epochs):
+                    if hasattr(model, 'train_step') and hasattr(data, 'train_mask'):
+                        # Use existing train_step method if available
+                        loss = model.train_step(data, data.train_mask)
+                    else:
+                        # Traditional PyTorch training loop
+                        model.train()
+                        optimizer = torch.optim.Adam(model.parameters(), lr=config.get('learning_rate', 0.001))
+                        criterion = torch.nn.MSELoss()
+                        
+                        # Check and fix data dimensions for model input
+                        X_input = X
+                        if len(X_input.shape) == 3: # Likely [Batch, Nodes, Time] or [Batch, Time, Nodes]
+                            # Assuming STGNN expects [Batch, Features, Nodes, Time] -> add a feature dim
+                            X_input = X_input.unsqueeze(1) 
+                            # You might need X_input.permute(0, 3, 2, 1) or another order based on your data/model
+
+                        optimizer.zero_grad()
+                        output = model(X_input)
+                        
+                        # Ensure Y shape matches output shape for loss calculation
+                        # This is a common requirement in GNNs: output will have a different time dimension
+                        Y_target = Y[..., :output.shape[-1]] # Truncate Y to match output time length 
+                        
+                        loss = criterion(output, Y_target)
+                        loss.backward()
+                        optimizer.step()
+                        loss = loss.item()
+
+                    print(f"Epoch {epoch + 1} | Loss: {loss}")
+                    epoch_loss_data.append({'epoch': epoch + 1, 'loss': float(loss), 'mode': 'backprop'})
+
+                print("Traditional training completed!")
+
+        except Exception as e:
+            print(f"Training error: {e}")
+            # Add fallback loss data
+            epoch_loss_data.append({'epoch': 1, 'loss': 1.0, 'mode': 'error', 'error': str(e)})
+            # IMPORTANT: Re-raise the error so the workflow fails gracefully with logs
+            raise
+
+        print("Finished Model Training")
+
+        # Save epoch loss
+        output_dir_epoch_loss = os.path.dirname(args.epoch_loss)
+        if output_dir_epoch_loss and not os.path.exists(output_dir_epoch_loss):
+            os.makedirs(output_dir_epoch_loss, exist_ok=True)
+        with open(args.epoch_loss, 'w') as f:
+            f.write(json.dumps({
+                'training_mode': training_mode,
+                'epoch_losses': epoch_loss_data,
+                'total_epochs': len(epoch_loss_data),
+                'final_loss': epoch_loss_data[-1]['loss'] if epoch_loss_data else None
+            }))
+
+        # Save trained model
+        print("Saving trained model...")
+        try:
+            output_dir = os.path.dirname(args.trained_model)
+            if output_dir and not os.path.exists(output_dir):
+                os.makedirs(output_dir, exist_ok=True)
+                print(f"Created directory: {output_dir}")
+
+            torch.save(model.state_dict(), args.trained_model)
+            print(f"Saved trained model to {args.trained_model}")
+        except Exception as e:
+            print(f"Error saving trained model: {e}")
+            # Create empty file to prevent workflow failure
+            torch.save({}, args.trained_model)
+
+        print("Training workflow completed successfully!")
+    args:
+      - --data_path
+      - {inputPath: data_path}
+      - --model
+      - {inputPath: model}
+      - --config
+      - {inputValue: config}
+      - --trained_model
+      - {outputPath: trained_model}
+      - --epoch_loss
+      - {outputPath: epoch_loss}
