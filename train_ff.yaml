@@ -1,5 +1,5 @@
 name: V_Train_GNN_FF_Fixed
-description: Trains STGNN with Backprop / CAFO / Forward-Forward (Bulletproof)
+description: Trains STGNN with Backprop / CAFO / Forward-Forward
 inputs:
   - {name: data_path, type: Dataset}
   - {name: model, type: Model}
