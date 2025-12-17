@@ -183,7 +183,7 @@ implementation:
         print(f"Training mode: {training_mode}")
 
         # =================================================================
-        # CRITICAL FIX: RECEPTIVE FIELD CHECK & PADDING 🛠️
+        # CRITICAL FIX: RECEPTIVE FIELD CHECK & PADDING 
         # =================================================================
         layers = config.get('layers', 2)
         dilation_exponential = config.get('dilation_exponential', 2)
