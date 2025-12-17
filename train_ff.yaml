@@ -37,10 +37,29 @@ implementation:
         __builtins__.__import__ = block_torchvision
 
         from nesy_factory.GNNs import create_model
-        from nesy_factory.GNNs.stgnn import STGNN
+        import nesy_factory.GNNs.stgnn as stgnn_module
         
         # Restore original import after loading nesy_factory
         __builtins__.__import__ = original_import
+        
+        # MONKEY PATCH LayerNorm to fix negative dimension bug
+        original_layernorm_init = stgnn_module.LayerNorm.__init__
+        def patched_layernorm_init(self, normalized_shape, eps=1e-05, elementwise_affine=True):
+            # Fix negative dimensions in normalized_shape
+            if isinstance(normalized_shape, (list, tuple)):
+                # Only keep positive dimensions, fall back to channel-only
+                fixed_shape = tuple(d for d in normalized_shape if d > 0)
+                if not fixed_shape or len(fixed_shape) > 1:
+                    # Use only first positive dimension (residual_channels)
+                    fixed_shape = (normalized_shape[0],) if normalized_shape[0] > 0 else (16,)
+                print(f"🔧 LayerNorm fix: {normalized_shape} -> {fixed_shape}")
+                normalized_shape = fixed_shape
+            original_layernorm_init(self, normalized_shape, eps, elementwise_affine)
+        
+        stgnn_module.LayerNorm.__init__ = patched_layernorm_init
+        print(" LayerNorm monkey-patched successfully!")
+        
+        STGNN = stgnn_module.STGNN
         
         class DataWrapper:
           def __init__(self, data_dict):
@@ -160,12 +179,21 @@ implementation:
             
         print(f"Training mode: {training_mode}")
 
-        # NEGATIVE TENSOR FIX: Validate config parameters
+        # NEGATIVE TENSOR FIX: Validate config parameters (backup safety)
         config['num_nodes'] = max(1, config.get('num_nodes', 6))
         config['seq_in_len'] = max(12, config.get('seq_in_len', 100))
         config['layers'] = max(1, config.get('layers', 2))
         config['conv_channels'] = max(8, config.get('conv_channels', 16))
         config['residual_channels'] = max(8, config.get('residual_channels', 16))
+        config['skip_channels'] = max(8, config.get('skip_channels', 32))
+        config['end_channels'] = max(8, config.get('end_channels', 64))
+        config['dilation_exponential'] = max(1, config.get('dilation_exponential', 2))
+        
+        # Additional safety checks
+        config['seq_length'] = config.get('seq_length', config['seq_in_len'])
+        config['receptive_field'] = max(config['seq_in_len'], config.get('receptive_field', config['seq_in_len']))
+        
+        print(f" Config pre-validated: num_nodes={config['num_nodes']}, seq_in_len={config['seq_in_len']}")
 
         print("Creating model...")
         model_name = config.get('model_name', 'stgnn')
@@ -173,7 +201,7 @@ implementation:
         # Create fresh model with validated config
         if model_name.lower() == 'stgnn':
             model = STGNN(config)
-            print("Created STGNN model")
+            print("Created STGNN model with patched LayerNorm")
         else:
             model = create_model(model_name, config)
             print(f"Created {model_name} model")
