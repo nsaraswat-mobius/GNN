@@ -52,7 +52,7 @@ implementation:
                 if not fixed_shape or len(fixed_shape) > 1:
                     # Use only first positive dimension (residual_channels)
                     fixed_shape = (normalized_shape[0],) if normalized_shape[0] > 0 else (16,)
-                print(f"🔧 LayerNorm fix: {normalized_shape} -> {fixed_shape}")
+                print(f" LayerNorm fix: {normalized_shape} -> {fixed_shape}")
                 normalized_shape = fixed_shape
             original_layernorm_init(self, normalized_shape, eps, elementwise_affine)
         
