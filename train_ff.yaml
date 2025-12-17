@@ -1,17 +1,12 @@
 name: V_Train_GNN_FF_Fixed
 description: Trains STGNN with Backprop / CAFO / Forward-Forward (Bulletproof)
 inputs:
-  - name: data_path
-    type: Dataset
-  - name: model
-    type: Model
-  - name: config
-    type: String
+  - {name: data_path, type: Dataset}
+  - {name: model, type: Model}
+  - {name: config, type: String}
 outputs:
-  - name: trained_model
-    type: Model
-  - name: epoch_loss
-    type: String
+  - {name: trained_model, type: Model}
+  - {name: epoch_loss, type: String}
 implementation:
   container:
     image: gurpreetgandhi/nesy-factory:v38-gpu
