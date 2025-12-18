@@ -27,7 +27,6 @@ implementation:
         # 1. CORE DATA CLASSES (Required for Pickle Loading)
         # =====================================================
         class DataWrapper:
-            """Preserves the structure of the incoming pickle data."""
             def __init__(self, data_dict):
                 self.__dict__.update(data_dict)
 
@@ -179,7 +178,7 @@ implementation:
         with open(args.epoch_loss, 'w') as f:
             json.dump({'epoch_losses': epoch_loss_data}, f)
         
-        print("🏁 Training Component Finished Successfully.")
+        print(" Training Component Finished Successfully.")
     args:
       - --data_path
       - {inputPath: data_path}
