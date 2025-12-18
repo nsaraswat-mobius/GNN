@@ -9,7 +9,7 @@ outputs:
   - {name: epoch_loss, type: String, description: 'JSON string containing loss history'}
 implementation:
   container:
-    image: gurpreetgandhi/nesy-factory:v38-gpu
+    image: gurpreetgandhi/nesy-factory:vtest1
     command:
       - sh
       - -c
