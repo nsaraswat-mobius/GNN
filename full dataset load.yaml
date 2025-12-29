@@ -1,5 +1,5 @@
 name: Load JSON dataset with Smart Pagination
-description: Fetches all JSON records from API by dynamically updating URL parameters to avoid infinite loops.
+description: Fetches JSON records and handles nested dictionary types safely.
 inputs:
   - {name: api_url, type: String, description: 'API URL to fetch JSON dataset'}
   - {name: access_token, type: String, description: 'Bearer access token for API auth'}
@@ -42,7 +42,6 @@ implementation:
         parser.add_argument('--anomaly_data', type=str, required=True)
         args = parser.parse_args()
 
-        # Authorization Token Handling
         if os.path.exists(args.access_token):
             with open(args.access_token, 'r') as f:
                 access_token = f.read().strip()
@@ -55,43 +54,32 @@ implementation:
         session = requests.Session()
         retries = Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
         session.mount("https://", HTTPAdapter(max_retries=retries))
-
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {access_token}"}
 
-        # --- PAGINATION LOGIC ---
         all_records = []
         limit = 2000
         current_page = 0
         fetching = True
 
-        # Parse the base URL and strip existing page/size parameters
         parsed_url = urlparse.urlparse(args.api_url)
         url_params = urlparse.parse_qs(parsed_url.query)
-        url_params.pop('page', None) # Remove hardcoded page=0
-        url_params.pop('size', None) # Remove hardcoded size
-
-        
+        url_params.pop('page', None)
+        url_params.pop('size', None)
 
         while fetching:
-            # Update the page number dynamically for this specific request
             url_params['page'] = [str(current_page)]
             url_params['size'] = [str(limit)]
             new_query = urlencode(url_params, doseq=True)
             request_url = parsed_url._replace(query=new_query).geturl()
 
-            payload = {
-                "dbType": "TIDB",
-                "limit": limit,
-                "offset": current_page * limit
-            }
+            payload = {"dbType": "TIDB", "limit": limit, "offset": current_page * limit}
 
             try:
-                logger.info(f"Requesting Page {current_page} from: {request_url}")
+                logger.info(f"Requesting Page {current_page}")
                 resp = session.post(request_url, headers=headers, json=payload, timeout=60)
                 resp.raise_for_status()
                 json_response = resp.json()
 
-                # Some APIs return a list, others return a dict like {"content": [...]}
                 if isinstance(json_response, dict):
                     batch = json_response.get('content', json_response.get('data', json_response.get('instances', [])))
                 else:
@@ -100,45 +88,39 @@ implementation:
                 batch_len = len(batch) if isinstance(batch, list) else 0
                 
                 if batch_len == 0:
-                    logger.info("Empty batch received. Fetching complete.")
                     fetching = False
                 else:
                     all_records.extend(batch)
-                    logger.info(f"Page {current_page}: Fetched {batch_len}. Total: {len(all_records)}")
-                    
-                    # Safety check: if we got exactly 6650 records, Page 3 will return 650 records. 
-                    # Since 650 < 2000, we know it's the last page.
+                    logger.info(f"Total: {len(all_records)}")
                     if batch_len < limit:
-                        logger.info("Last page reached.")
                         fetching = False
                     else:
                         current_page += 1
-                        
             except Exception as e:
-                logger.error(f"Error during fetch at page {current_page}: {e}")
+                logger.error(f"Error: {e}")
                 raise
 
-        # --- DATA PROCESSING ---
-        if not all_records:
-            raise ValueError("No records fetched from API.")
-
+        # --- SAFE DATA PROCESSING ---
         df = pd.DataFrame(all_records)
-        
-        # Deduplication check
-        initial_count = len(df)
-        df = df.drop_duplicates()
-        if len(df) < initial_count:
-            logger.warning(f"Removed {initial_count - len(df)} duplicates. Actual unique records: {len(df)}")
+        logger.info(f"Starting processing for {len(df)} records.")
 
+        # Define columns needed for training
         numeric_cols = ["endpoint_count", "reachable_frac", "deg_cent", "betw_cent", "clustering", "pagerank"]
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
+        
+        # Only keep columns that are in the numeric list (this avoids the 'dict' error)
+        existing_cols = [c for c in numeric_cols if c in df.columns]
+        df = df[existing_cols].copy()
+
+        # Convert to numeric and fill NaN
+        for col in existing_cols:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
         
         df.fillna(0, inplace=True)
-        existing_cols = [c for c in numeric_cols if c in df.columns]
-        df = df[existing_cols]
         
+        # Now it is safe to drop duplicates because we only have numbers, no dicts
+        df = df.drop_duplicates()
+        logger.info(f"Final dataset size after cleaning: {len(df)}")
+
         # Anomaly Detection Logic
         anomaly_labels = (df["reachable_frac"] == 0.0).astype(np.int32)
         
@@ -146,14 +128,7 @@ implementation:
             df, anomaly_labels, test_size=0.2, random_state=42, stratify=anomaly_labels
         )
         
-        # Saving Outputs
-        output_map = [
-            (args.train_data, train_df), 
-            (args.test_data, test_df), 
-            (args.anomaly_data, test_labels)
-        ]
-        
-        for path, data in output_map:
+        for path, data in [(args.train_data, train_df), (args.test_data, test_df), (args.anomaly_data, test_labels)]:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             with open(path, "wb") as f:
                 pickle.dump(data, f)
