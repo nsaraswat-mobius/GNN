@@ -2,7 +2,7 @@ name: Load JSON dataset with Smart Pagination
 description: Fetches JSON records and handles nested dictionary types safely.
 inputs:
   - {name: api_url, type: String, description: 'API URL to fetch JSON dataset'}
-  - {name: access_token, type: String, description: 'Bearer access token for API auth'}
+  - {name: access_token, type: string, description: 'Bearer access token for API auth'}
 outputs:
   - {name: train_data, type: Dataset}
   - {name: test_data, type: Dataset}
