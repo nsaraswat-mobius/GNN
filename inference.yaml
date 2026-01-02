@@ -97,7 +97,7 @@ implementation:
         
         result = infer_and_detect_anomaly(model, data, config)
 
-         print("Inference Result:", result)
+        print("Inference Result:", result)
         
         os.makedirs(os.path.dirname(args.inference_result) or ".", exist_ok=True)
         with open(args.inference_result, "w") as f:
