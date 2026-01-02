@@ -1,0 +1,141 @@
+name: Load JSON dataset with Smart Pagination
+description: Fetches JSON records and handles nested dictionary types safely.
+inputs:
+  - {name: api_url, type: String, description: 'API URL to fetch JSON dataset'}
+  - {name: access_token, type: string, description: 'Bearer access token for API auth'}
+outputs:
+  - {name: train_data, type: Dataset}
+  - {name: test_data, type: Dataset}
+  - {name: anomaly_data, type: Dataset}
+implementation:
+  container:
+    image: python:3.9
+    command:
+      - sh
+      - -c
+      - |
+        python3 -m pip install --quiet requests pandas scikit-learn || \
+        python3 -m pip install --quiet requests pandas scikit-learn --user
+        exec "$0" "$@"
+      - python3
+      - -u
+      - -c
+      - |
+        import argparse
+        import os
+        import pickle
+        import pandas as pd
+        import numpy as np
+        import requests
+        from sklearn.model_selection import train_test_split
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+        import urllib.parse as urlparse
+        from urllib.parse import urlencode
+        import logging
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--api_url', type=str, required=True)
+        parser.add_argument('--access_token', type=str, required=True)
+        parser.add_argument('--train_data', type=str, required=True)
+        parser.add_argument('--test_data', type=str, required=True)
+        parser.add_argument('--anomaly_data', type=str, required=True)
+        args = parser.parse_args()
+
+        if os.path.exists(args.access_token):
+            with open(args.access_token, 'r') as f:
+                access_token = f.read().strip()
+        else:
+            access_token = args.access_token
+        
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger("api_pagination")
+
+        session = requests.Session()
+        retries = Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+        session.mount("https://", HTTPAdapter(max_retries=retries))
+        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {access_token}"}
+
+        all_records = []
+        limit = 2000
+        current_page = 0
+        fetching = True
+
+        parsed_url = urlparse.urlparse(args.api_url)
+        url_params = urlparse.parse_qs(parsed_url.query)
+        url_params.pop('page', None)
+        url_params.pop('size', None)
+
+        while fetching:
+            url_params['page'] = [str(current_page)]
+            url_params['size'] = [str(limit)]
+            new_query = urlencode(url_params, doseq=True)
+            request_url = parsed_url._replace(query=new_query).geturl()
+
+            payload = {"dbType": "TIDB", "limit": limit, "offset": current_page * limit}
+
+            try:
+                logger.info(f"Requesting Page {current_page}")
+                resp = session.post(request_url, headers=headers, json=payload, timeout=60)
+                resp.raise_for_status()
+                json_response = resp.json()
+
+                if isinstance(json_response, dict):
+                    batch = json_response.get('content', json_response.get('data', json_response.get('instances', [])))
+                else:
+                    batch = json_response
+
+                batch_len = len(batch) if isinstance(batch, list) else 0
+                
+                if batch_len == 0:
+                    fetching = False
+                else:
+                    all_records.extend(batch)
+                    logger.info(f"Total: {len(all_records)}")
+                    if batch_len < limit:
+                        fetching = False
+                    else:
+                        current_page += 1
+            except Exception as e:
+                logger.error(f"Error: {e}")
+                raise
+
+        # --- SAFE DATA PROCESSING ---
+        df = pd.DataFrame(all_records)
+        logger.info(f"Starting processing for {len(df)} records.")
+
+        numeric_cols = ["endpoint_count", "reachable_frac", "deg_cent", "betw_cent", "clustering", "pagerank"]
+        existing_cols = [c for c in numeric_cols if c in df.columns]
+        df = df[existing_cols].copy()
+
+        for col in existing_cols:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        
+        df.fillna(0, inplace=True)
+        
+        # NOTE: drop_duplicates() removed per user request
+        logger.info(f"Final dataset size: {len(df)}")
+
+        # Anomaly Detection Logic
+        anomaly_labels = (df["reachable_frac"] == 0.0).astype(np.int32)
+        
+        train_df, test_df, train_labels, test_labels = train_test_split(
+            df, anomaly_labels, test_size=0.2, random_state=42, stratify=anomaly_labels
+        )
+        
+        for path, data in [(args.train_data, train_df), (args.test_data, test_df), (args.anomaly_data, test_labels)]:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            with open(path, "wb") as f:
+                pickle.dump(data, f)
+            
+    args:
+      - --api_url
+      - {inputValue: api_url}
+      - --access_token
+      - {inputValue: access_token}
+      - --train_data
+      - {outputPath: train_data}
+      - --test_data
+      - {outputPath: test_data}
+      - --anomaly_data
+      - {outputPath: anomaly_data}
