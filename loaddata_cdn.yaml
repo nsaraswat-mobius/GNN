@@ -1,14 +1,13 @@
-name: Data loader with cdn
+name: Data loader with cdn v1
 
 inputs:
   - {name: cdn_url, type: String, description: 'CDN URL to download dataset file (CSV, JSON, or Parquet)'}
   - {name: split_size, type: Integer, default: "15", description: 'Test split size percent or fraction'}
   - {name: target_column, type: String, description: 'Target column or comma-separated targets'}
-  - {name: model_type, type: String, default: "classification", description: 'classification or regression'}
-  - {name: anomaly_threshold, type: Float, default: "0.05", description: 'Percentage of data to isolate as anomalies (0-1)'}
+  
+  # NEW
   - {name: use_column, type: String, optional: true, description: 'Comma-separated columns to keep'}
   - {name: drop_columns, type: String, optional: true, description: 'Comma-separated columns to drop'}
-  - {name: anomaly_detection_method, type: String, default: "random", description: 'Method for anomaly detection: random, isolation_forest, zscore, iqr'}
 
 outputs:
   - {name: train_data, type: Dataset}
@@ -46,11 +45,8 @@ implementation:
         parser.add_argument('--cdn_url', required=True)
         parser.add_argument('--split_size', type=float, default=15)
         parser.add_argument('--target_column', required=True)
-        parser.add_argument('--model_type', default="classification")
-        parser.add_argument('--anomaly_threshold', type=float, default=0.05)
         parser.add_argument('--use_column', default=None)
         parser.add_argument('--drop_columns', default=None)
-        parser.add_argument('--anomaly_detection_method', default="random")
         parser.add_argument('--train_data', required=True)
         parser.add_argument('--test_data', required=True)
         parser.add_argument('--anomaly_data', required=True)
@@ -171,40 +167,26 @@ implementation:
         if missing_targets:
             raise ValueError(f"Target columns missing: {missing_targets}")
 
-        target_df = df[target_cols]
-
-        stratify = None
-        if args.model_type == "classification" and len(target_cols) == 1:
-            if target_df[target_cols[0]].nunique() > 1:
-                stratify = target_df[target_cols[0]]
+        # Default anomaly detection settings
+        anomaly_threshold = 0.05  # Fixed at 5%
+        anomaly_method = "isolation_forest"  # Fixed method
+        
+        logger.info(f"Using anomaly detection method: {anomaly_method}")
+        logger.info(f"Anomaly threshold: {anomaly_threshold:.1%}")
 
         # ---------- Split into train+test and anomalies ----------
         split = args.split_size / 100 if args.split_size >= 1 else args.split_size
         if not 0 < split < 1:
             raise ValueError("Invalid split_size")
 
-        # First, separate anomalies
-        anomaly_threshold = max(0.01, min(0.5, args.anomaly_threshold))  # Clamp between 1% and 50%
-        
-        logger.info(f"Using anomaly detection method: {args.anomaly_detection_method}")
-        logger.info(f"Anomaly threshold: {anomaly_threshold:.1%}")
-        
         # Function to detect anomalies
         def detect_anomalies(data, method, contamination):
-            if method == "random":
-                # Random selection
-                n_anomalies = int(len(data) * contamination)
-                if n_anomalies == 0:
-                    return pd.Series([False] * len(data), index=data.index)
-                anomaly_idx = np.random.choice(data.index, size=n_anomalies, replace=False)
-                return pd.Series(data.index.isin(anomaly_idx), index=data.index)
-            
-            elif method == "isolation_forest":
+            if method == "isolation_forest":
                 # Use Isolation Forest for anomaly detection
                 numeric_cols = data.select_dtypes(include=[np.number]).columns
                 if len(numeric_cols) == 0:
                     logger.warning("No numeric columns for Isolation Forest, using random")
-                    return detect_anomalies(data, "random", contamination)
+                    return pd.Series([False] * len(data), index=data.index)
                 
                 X = data[numeric_cols].fillna(0)
                 iso_forest = IsolationForest(
@@ -220,7 +202,7 @@ implementation:
                 numeric_cols = data.select_dtypes(include=[np.number]).columns
                 if len(numeric_cols) == 0:
                     logger.warning("No numeric columns for Z-score, using random")
-                    return detect_anomalies(data, "random", contamination)
+                    return pd.Series([False] * len(data), index=data.index)
                 
                 # Calculate z-scores
                 z_scores = np.abs(stats.zscore(data[numeric_cols].fillna(0)))
@@ -244,53 +226,13 @@ implementation:
                 
                 return pd.Series(anomaly_mask, index=data.index)
             
-            elif method == "iqr":
-                # Use IQR method for numeric columns
-                numeric_cols = data.select_dtypes(include=[np.number]).columns
-                if len(numeric_cols) == 0:
-                    logger.warning("No numeric columns for IQR, using random")
-                    return detect_anomalies(data, "random", contamination)
-                
-                anomaly_mask = pd.Series([False] * len(data), index=data.index)
-                
-                for col in numeric_cols:
-                    Q1 = data[col].quantile(0.25)
-                    Q3 = data[col].quantile(0.75)
-                    IQR = Q3 - Q1
-                    lower_bound = Q1 - 1.5 * IQR
-                    upper_bound = Q3 + 1.5 * IQR
-                    col_anomalies = (data[col] < lower_bound) | (data[col] > upper_bound)
-                    anomaly_mask = anomaly_mask | col_anomalies
-                
-                # Adjust to meet contamination rate if possible
-                if anomaly_mask.sum() > len(data) * contamination:
-                    max_anomalies = int(len(data) * contamination)
-                    # Use combination of features exceeding bounds
-                    anomaly_scores = anomaly_mask.astype(int)
-                    for col in numeric_cols:
-                        Q1 = data[col].quantile(0.25)
-                        Q3 = data[col].quantile(0.75)
-                        IQR = Q3 - Q1
-                        col_score = ((data[col] - Q1).abs() + (data[col] - Q3).abs()) / IQR
-                        anomaly_scores += col_score.fillna(0)
-                    
-                    threshold = np.sort(anomaly_scores)[::-1][max_anomalies]
-                    anomaly_mask = anomaly_scores >= threshold
-                elif anomaly_mask.sum() < len(data) * contamination:
-                    needed = int(len(data) * contamination) - anomaly_mask.sum()
-                    if needed > 0:
-                        non_anomaly_idx = data.index[~anomaly_mask]
-                        extra_idx = np.random.choice(non_anomaly_idx, size=needed, replace=False)
-                        anomaly_mask[extra_idx] = True
-                
-                return pd.Series(anomaly_mask, index=data.index)
-            
             else:
-                logger.warning(f"Unknown anomaly detection method: {method}, using random")
-                return detect_anomalies(data, "random", contamination)
+                # Default to isolation_forest
+                logger.warning(f"Using default isolation_forest method")
+                return detect_anomalies(data, "isolation_forest", contamination)
 
-        # Detect anomalies
-        is_anomaly = detect_anomalies(df, args.anomaly_detection_method, anomaly_threshold)
+        # Detect anomalies using fixed method and threshold
+        is_anomaly = detect_anomalies(df, anomaly_method, anomaly_threshold)
         anomaly_df = df[is_anomaly]
         normal_df = df[~is_anomaly]
 
@@ -299,20 +241,14 @@ implementation:
         # Split normal data into train and test
         if len(normal_df) > 0:
             try:
-                # Adjust split size for remaining normal data
-                if stratify is not None:
-                    normal_stratify = stratify[~is_anomaly]
-                else:
-                    normal_stratify = None
-                
                 train_df, test_df = train_test_split(
                     normal_df, 
                     test_size=split, 
                     random_state=42, 
-                    stratify=normal_stratify
+                    stratify=None
                 )
             except ValueError:
-                logger.warning("Stratified split failed, retrying without stratification")
+                logger.warning("Train-test split failed, retrying")
                 train_df, test_df = train_test_split(
                     normal_df, 
                     test_size=split, 
@@ -351,16 +287,10 @@ implementation:
       - {inputValue: split_size}
       - --target_column
       - {inputValue: target_column}
-      - --model_type
-      - {inputValue: model_type}
-      - --anomaly_threshold
-      - {inputValue: anomaly_threshold}
       - --use_column
       - {inputValue: use_column}
       - --drop_columns
       - {inputValue: drop_columns}
-      - --anomaly_detection_method
-      - {inputValue: anomaly_detection_method}
       - --train_data
       - {outputPath: train_data}
       - --test_data
