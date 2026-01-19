@@ -1,11 +1,10 @@
-name: Preprocess v2
-description: Preprocesses Kubernetes metrics for GNN anomaly detection - assumes feast_entity_id already dropped by data loader.
+name: Preprocess v3
+description: Preprocesses Kubernetes metrics for GNN anomaly detection - handles edge cases.
 inputs:
   - {name: train_data, type: Dataset}
   - {name: test_data, type: Dataset}
   - {name: anomaly_data, type: Dataset}
-  - {name: window_size, type: Integer, default: "100", description: 'Window size for time series segmentation'}
-  - {name: batch_size, type: Integer, default: "64", description: 'Batch size for training'}
+  - {name: window_size, type: Integer, default: "10", description: 'Window size for time series segmentation'}
 outputs:
   - {name: processed_data_pickle, type: Dataset}
   - {name: metadata_json, type: String, description: "Metadata about processed dataset"}
@@ -18,10 +17,9 @@ implementation:
       - |
         set -e
         apt-get update && apt-get install -y --no-install-recommends wget
-        # Install ALL required dependencies
-        pip install pandas scikit-learn numpy torch pyarrow scipy
+        pip install pandas scikit-learn numpy pyarrow scipy joblib
         
-        # --- Main preprocessing script ---
+        # --- Fixed preprocessing script ---
         cat > preprocess_gnn.py << 'EOF'
         import argparse
         import os
@@ -29,7 +27,6 @@ implementation:
         import json
         import pandas as pd
         import numpy as np
-        import torch
         from sklearn.preprocessing import StandardScaler
         from sklearn.neighbors import kneighbors_graph
         
@@ -37,41 +34,13 @@ implementation:
             def __init__(self, data_dict):
                 self.__dict__.update(data_dict)
         
-        class DataLoaderM:
-            def __init__(self, xs, ys=None, batch_size=64, shuffle=True):
-                self.batch_size = batch_size
-                self.current_ind = 0
-                self.shuffle_flag = shuffle
-                
-                if ys is None:
-                    ys = np.zeros((len(xs), 1))
-                
-                self.size = len(xs)
-                self.num_batch = int(np.ceil(self.size / self.batch_size))
-                self.xs = xs
-                self.ys = ys
-                
-                if shuffle:
-                    self.shuffle()
-            
-            def shuffle(self):
-                permutation = np.random.permutation(self.size)
-                self.xs = self.xs[permutation]
-                self.ys = self.ys[permutation]
-            
-            def get_iterator(self):
-                self.current_ind = 0
-                def _wrapper():
-                    while self.current_ind < self.num_batch:
-                        start_ind = self.batch_size * self.current_ind
-                        end_ind = min(self.size, self.batch_size * (self.current_ind + 1))
-                        x_i = self.xs[start_ind:end_ind]
-                        y_i = self.ys[start_ind:end_ind]
-                        yield (x_i, y_i)
-                        self.current_ind += 1
-                return _wrapper()
-        
         def create_sliding_windows(data, window_size, stride=1):
+            if len(data) < window_size:
+                # Pad with zeros
+                padding = np.zeros((window_size - len(data), data.shape[1]), dtype=data.dtype)
+                data = np.vstack([data, padding])
+                return np.array([data])
+            
             sequences = []
             num_samples = len(data)
             
@@ -83,29 +52,47 @@ implementation:
         
         def build_graph_from_features(features, k=5):
             n_samples = len(features)
-            if n_samples < k:
-                k = max(1, n_samples - 1)
             
-            # Build adjacency matrix using k-NN
-            adj_matrix = kneighbors_graph(features, n_neighbors=k, mode='connectivity', include_self=False)
-            adj_matrix = adj_matrix.toarray()
-            
-            # Make it symmetric (undirected graph)
-            adj_matrix = np.maximum(adj_matrix, adj_matrix.T)
-            
-            return adj_matrix
+            # Handle edge cases
+            if n_samples == 0:
+                return np.array([]).reshape(0, 0)
+            elif n_samples == 1:
+                # Single node - self-loop or empty graph
+                return np.ones((1, 1))  # Self-loop for single node
+            else:
+                # Ensure k is valid
+                k = max(1, min(k, n_samples - 1))
+                
+                # Build adjacency matrix using k-NN
+                adj_matrix = kneighbors_graph(features, n_neighbors=k, mode='connectivity', include_self=False)
+                adj_matrix = adj_matrix.toarray()
+                
+                # Make it symmetric (undirected graph)
+                adj_matrix = np.maximum(adj_matrix, adj_matrix.T)
+                
+                return adj_matrix
         
         def preprocess_for_gnn(train_df, test_df, anomaly_df, config):
             print(f"Input shapes - Train: {train_df.shape}, Test: {test_df.shape}, Anomaly: {anomaly_df.shape}")
             
+            # Drop is_anomaly column if present
+            for df_name, df in [('train', train_df), ('test', test_df), ('anomaly', anomaly_df)]:
+                if 'is_anomaly' in df.columns:
+                    df = df.drop(columns=['is_anomaly'])
+                    if df_name == 'train':
+                        train_df = df
+                    elif df_name == 'test':
+                        test_df = df
+                    else:
+                        anomaly_df = df
+            
             # Verify feast_entity_id is already dropped
             if 'feast_entity_id' in train_df.columns:
-                print("Warning: feast_entity_id still present in data. Dropping it now.")
                 train_df = train_df.drop(columns=['feast_entity_id'])
                 test_df = test_df.drop(columns=['feast_entity_id'])
                 anomaly_df = anomaly_df.drop(columns=['feast_entity_id'])
             
-            # Ensure all columns are present and in same order
+            # Expected columns
             expected_cols = [
                 'ratio_cpu', 'ratio_memory', 'ratio_storage', 'ratio_pods',
                 'cond_ready', 'cond_memorypressure', 'cond_diskpressure', 
@@ -113,22 +100,20 @@ implementation:
                 'closeness', 'clustering'
             ]
             
-            # Check which columns we actually have
+            # Use available columns
             available_cols = [col for col in expected_cols if col in train_df.columns]
             print(f"Available columns: {available_cols}")
-            print(f"Missing columns: {set(expected_cols) - set(available_cols)}")
             
-            # Use available columns
-            train_df = train_df[available_cols]
-            test_df = test_df[available_cols]
-            anomaly_df = anomaly_df[available_cols]
+            train_df = train_df[available_cols].copy()
+            test_df = test_df[available_cols].copy()
+            anomaly_df = anomaly_df[available_cols].copy()
             
-            # Convert all to numeric
+            # Convert all to numeric (using .loc to avoid SettingWithCopyWarning)
             for df in [train_df, test_df, anomaly_df]:
                 for col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                    df.loc[:, col] = pd.to_numeric(df[col], errors='coerce')
             
-            # Fill NaN values with column median
+            # Fill NaN values
             train_df = train_df.fillna(train_df.median())
             test_df = test_df.fillna(test_df.median())
             anomaly_df = anomaly_df.fillna(anomaly_df.median())
@@ -143,122 +128,125 @@ implementation:
             print(f"  Test: {test_data.shape}")
             print(f"  Anomaly: {anomaly_data.shape}")
             
-            # ========== FOR GNN ANOMALY DETECTION ==========
-            
-            # 1. Create node features (each time window becomes a node)
+            # ========== WINDOW CREATION ==========
             window_size = config['window_size']
             
-            # Create windows from training data (normal data only)
-            train_windows = create_sliding_windows(train_data, window_size)
-            print(f"Created {len(train_windows)} training windows")
+            # Create windows with stride = window_size // 2 (50% overlap)
+            stride = max(1, window_size // 2)
+            train_windows = create_sliding_windows(train_data, window_size, stride)
+            print(f"Created {len(train_windows)} training windows (stride={stride})")
             
-            # Create windows from test + anomaly data for evaluation
-            eval_data = np.vstack([test_data, anomaly_data])
-            eval_windows = create_sliding_windows(eval_data, window_size)
+            # Create evaluation windows
+            if len(anomaly_data) > 0:
+                eval_data = np.vstack([test_data, anomaly_data])
+            else:
+                eval_data = test_data
+                print("Warning: No anomaly data available")
+            
+            eval_windows = create_sliding_windows(eval_data, window_size, stride)
             print(f"Created {len(eval_windows)} evaluation windows")
             
-            # 2. Create node features by aggregating windows
-            # For GNN, each window becomes a node with aggregated features
-            train_node_features = train_windows.mean(axis=1)  # Mean across time dimension
-            eval_node_features = eval_windows.mean(axis=1)
+            # ========== NODE FEATURES AND SCALING ==========
+            train_node_features = train_windows.mean(axis=1)
+            eval_node_features = eval_windows.mean(axis=1) if len(eval_windows) > 0 else np.array([])
             
-            # 3. Scale features
             scaler = StandardScaler()
             train_node_features_scaled = scaler.fit_transform(train_node_features)
-            eval_node_features_scaled = scaler.transform(eval_node_features)
+            eval_node_features_scaled = scaler.transform(eval_node_features) if len(eval_node_features) > 0 else np.array([])
             
-            # 4. Build graph for training data
-            print("Building graph from training data...")
+            # ========== GRAPH BUILDING ==========
+            print("Building graphs...")
             train_adj_matrix = build_graph_from_features(train_node_features_scaled, k=config['k_neighbors'])
             
-            # 5. Split evaluation data
-            val_ratio = 0.3
-            val_size = int(len(eval_node_features_scaled) * val_ratio)
+            # Split evaluation data
+            val_ratio = config['val_ratio']
+            if len(eval_node_features_scaled) > 1:
+                val_size = max(1, int(len(eval_node_features_scaled) * val_ratio))
+                val_node_features = eval_node_features_scaled[:val_size]
+                test_node_features = eval_node_features_scaled[val_size:]
+                
+                # Ensure we have at least 1 test sample
+                if len(test_node_features) == 0 and len(val_node_features) > 1:
+                    # Move one from validation to test
+                    test_node_features = val_node_features[-1:]
+                    val_node_features = val_node_features[:-1]
+            elif len(eval_node_features_scaled) == 1:
+                # Only one evaluation sample - use for test
+                val_node_features = np.array([])
+                test_node_features = eval_node_features_scaled
+            else:
+                val_node_features = np.array([])
+                test_node_features = np.array([])
             
-            val_node_features = eval_node_features_scaled[:val_size]
-            test_node_features = eval_node_features_scaled[val_size:]
+            # Build validation and test graphs
+            val_adj_matrix = build_graph_from_features(val_node_features, k=min(config['k_neighbors'], max(1, len(val_node_features)-1)))
+            test_adj_matrix = build_graph_from_features(test_node_features, k=min(config['k_neighbors'], max(1, len(test_node_features)-1)))
             
-            # Build graphs for validation and test (using same k)
-            val_adj_matrix = build_graph_from_features(val_node_features, k=min(config['k_neighbors'], len(val_node_features)-1))
-            test_adj_matrix = build_graph_from_features(test_node_features, k=min(config['k_neighbors'], len(test_node_features)-1))
+            print(f"Graph sizes - Train: {len(train_node_features_scaled)}, Val: {len(val_node_features)}, Test: {len(test_node_features)}")
             
-            # 6. Create labels
-            # For evaluation: normal test windows = 0, anomaly windows = 1
-            test_normal_windows = len(create_sliding_windows(test_data, window_size))
-            anomaly_windows = len(create_sliding_windows(anomaly_data, window_size))
+            # ========== LABELS ==========
+            # Create labels (0=normal, 1=anomaly)
+            if len(anomaly_data) > 0:
+                # Calculate how many windows come from anomaly data
+                test_normal_windows = len(create_sliding_windows(test_data, window_size, stride))
+                anomaly_windows = len(create_sliding_windows(anomaly_data, window_size, stride))
+                
+                # Create labels for all evaluation windows
+                total_eval_windows = test_normal_windows + anomaly_windows
+                eval_labels = np.zeros(total_eval_windows, dtype=np.int32)
+                if anomaly_windows > 0:
+                    eval_labels[test_normal_windows:] = 1  # Mark anomaly windows
+            else:
+                # No anomalies - all windows are normal
+                eval_labels = np.zeros(len(eval_windows), dtype=np.int32)
             
-            eval_labels = np.concatenate([
-                np.zeros(test_normal_windows, dtype=np.int32),
-                np.ones(anomaly_windows, dtype=np.int32)
-            ])
+            # Split labels to match validation/test split
+            if len(eval_labels) > 0:
+                val_labels = eval_labels[:len(val_node_features)] if len(val_node_features) > 0 else np.array([])
+                test_labels = eval_labels[len(val_node_features):] if len(test_node_features) > 0 else np.array([])
+            else:
+                val_labels = np.array([])
+                test_labels = np.array([])
             
-            val_labels = eval_labels[:val_size]
-            test_labels = eval_labels[val_size:]
-            
-            # 7. Convert to PyTorch tensors (for GNN compatibility)
-            train_features_tensor = torch.FloatTensor(train_node_features_scaled)
-            val_features_tensor = torch.FloatTensor(val_node_features)
-            test_features_tensor = torch.FloatTensor(test_node_features)
-            
-            train_adj_tensor = torch.FloatTensor(train_adj_matrix)
-            val_adj_tensor = torch.FloatTensor(val_adj_matrix)
-            test_adj_tensor = torch.FloatTensor(test_adj_matrix)
-            
-            train_labels_tensor = torch.zeros(len(train_node_features_scaled), dtype=torch.long)
-            val_labels_tensor = torch.LongTensor(val_labels)
-            test_labels_tensor = torch.LongTensor(test_labels)
-            
-            # 8. Create metadata
+            # ========== METADATA ==========
             metadata = {
                 'num_nodes_train': len(train_node_features_scaled),
                 'num_nodes_val': len(val_node_features),
                 'num_nodes_test': len(test_node_features),
-                'num_features': train_node_features_scaled.shape[1],
+                'num_features': train_data.shape[1],
                 'feature_names': available_cols,
                 'window_size': window_size,
+                'stride': stride,
                 'k_neighbors': config['k_neighbors'],
-                'train_anomaly_ratio': 0.0,  # Training has only normal data
+                'train_anomaly_ratio': 0.0,
                 'val_anomaly_ratio': val_labels.mean() if len(val_labels) > 0 else 0,
                 'test_anomaly_ratio': test_labels.mean() if len(test_labels) > 0 else 0,
                 'adj_matrix_density': {
-                    'train': float(train_adj_matrix.mean()),
-                    'val': float(val_adj_matrix.mean()) if len(val_node_features) > 0 else 0,
-                    'test': float(test_adj_matrix.mean()) if len(test_node_features) > 0 else 0
+                    'train': float(train_adj_matrix.mean()) if train_adj_matrix.size > 0 else 0,
+                    'val': float(val_adj_matrix.mean()) if val_adj_matrix.size > 0 else 0,
+                    'test': float(test_adj_matrix.mean()) if test_adj_matrix.size > 0 else 0
                 }
             }
             
-            # 9. Create DataWrapper
+            # ========== DATA WRAPPER ==========
             data_dict = {
-                # Node features
-                'x_train': train_features_tensor,
-                'x_val': val_features_tensor,
-                'x_test': test_features_tensor,
-                
-                # Adjacency matrices
-                'adj_train': train_adj_tensor,
-                'adj_val': val_adj_tensor,
-                'adj_test': test_adj_tensor,
-                
-                # Labels
-                'y_train': train_labels_tensor,
-                'y_val': val_labels_tensor,
-                'y_test': test_labels_tensor,
-                
-                # Original windows (for reconstruction-based methods)
+                'x_train': train_node_features_scaled,
+                'x_val': val_node_features,
+                'x_test': test_node_features,
+                'adj_train': train_adj_matrix,
+                'adj_val': val_adj_matrix,
+                'adj_test': test_adj_matrix,
+                'y_train': np.zeros(len(train_node_features_scaled), dtype=np.int32),
+                'y_val': val_labels,
+                'y_test': test_labels,
                 'train_windows': train_windows,
-                'val_windows': eval_windows[:val_size],
-                'test_windows': eval_windows[val_size:],
-                
-                # Scaler
+                'val_windows': eval_windows[:len(val_node_features)] if len(val_node_features) > 0 else np.array([]),
+                'test_windows': eval_windows[len(val_node_features):] if len(test_node_features) > 0 else np.array([]),
                 'scaler': scaler,
-                
-                # Metadata
                 'metadata': metadata,
-                
-                # Graph info
                 'num_nodes': len(train_node_features_scaled),
-                'num_features': train_node_features_scaled.shape[1],
-                'feature_dim': train_node_features_scaled.shape[1]
+                'num_features': train_data.shape[1],
+                'feature_dim': train_data.shape[1]
             }
             
             return DataWrapper(data_dict), metadata
@@ -268,50 +256,28 @@ implementation:
             parser.add_argument('--train_path', type=str, required=True)
             parser.add_argument('--test_path', type=str, required=True)
             parser.add_argument('--anomaly_path', type=str, required=True)
-            parser.add_argument('--window_size', type=int, default=100)
-            parser.add_argument('--batch_size', type=int, default=64)
+            parser.add_argument('--window_size', type=int, default=10)
             parser.add_argument('--output_pickle', type=str, required=True)
             parser.add_argument('--output_metadata', type=str, required=True)
             args = parser.parse_args()
             
             print("Starting GNN preprocessing for Kubernetes metrics...")
-            print(f"Reading Parquet files from:")
-            print(f"  Train: {args.train_path}")
-            print(f"  Test: {args.test_path}")
-            print(f"  Anomaly: {args.anomaly_path}")
             
-            # Load datasets (already filtered by data loader)
-            try:
-                train_df = pd.read_parquet(args.train_path)
-                test_df = pd.read_parquet(args.test_path)
-                anomaly_df = pd.read_parquet(args.anomaly_path)
-                print(" Successfully loaded all Parquet files")
-            except Exception as e:
-                print(f" Error loading Parquet files: {e}")
-                print("Trying alternative loading methods...")
-                
-                # Try reading as CSV as fallback
-                try:
-                    train_df = pd.read_csv(args.train_path)
-                    test_df = pd.read_csv(args.test_path)
-                    anomaly_df = pd.read_csv(args.anomaly_path)
-                    print(" Loaded as CSV files instead")
-                except Exception as e2:
-                    print(f" Failed to load files: {e2}")
-                    raise
+            # Load datasets
+            train_df = pd.read_parquet(args.train_path)
+            test_df = pd.read_parquet(args.test_path)
+            anomaly_df = pd.read_parquet(args.anomaly_path)
             
             print(f"Loaded datasets:")
-            print(f"  Train shape: {train_df.shape}")
-            print(f"  Test shape: {test_df.shape}")
-            print(f"  Anomaly shape: {anomaly_df.shape}")
-            print(f"  Train columns: {train_df.columns.tolist()}")
+            print(f"  Train: {train_df.shape[0]} samples")
+            print(f"  Test: {test_df.shape[0]} samples")
+            print(f"  Anomaly: {anomaly_df.shape[0]} samples")
             
-            # Configuration for GNN
+            # Adjust k_neighbors based on dataset size
             config = {
                 'window_size': args.window_size,
-                'batch_size': args.batch_size,
-                'k_neighbors': 5,  # For k-NN graph construction
-                'val_ratio': 0.3   # For splitting evaluation data
+                'k_neighbors': min(3, max(1, train_df.shape[0] // 30)),  # Adaptive k
+                'val_ratio': 0.3
             }
             
             print(f"Configuration: {config}")
@@ -330,14 +296,11 @@ implementation:
                 json.dump(metadata, f, indent=2)
             
             print(f"\\n Preprocessing complete!")
-            print(f" Processed data saved to: {args.output_pickle}")
-            print(f" Metadata saved to: {args.output_metadata}")
-            print(f"\\n Dataset statistics:")
-            print(f"  - Features: {metadata['num_features']}")
+            print(f" Dataset statistics:")
             print(f"  - Training nodes: {metadata['num_nodes_train']}")
-            print(f"  - Validation nodes: {metadata['num_nodes_val']} ({metadata['val_anomaly_ratio']:.1%} anomalies)")
-            print(f"  - Test nodes: {metadata['num_nodes_test']} ({metadata['test_anomaly_ratio']:.1%} anomalies)")
-            print(f"  - Graph density: Train={metadata['adj_matrix_density']['train']:.3f}")
+            print(f"  - Validation nodes: {metadata['num_nodes_val']}")
+            print(f"  - Test nodes: {metadata['num_nodes_test']}")
+            print(f"  - Features: {metadata['num_features']}")
         EOF
         
         # Run the preprocessing script
@@ -346,15 +309,13 @@ implementation:
           --test_path "$1" \
           --anomaly_path "$2" \
           --window_size "$3" \
-          --batch_size "$4" \
-          --output_pickle "$5" \
-          --output_metadata "$6"
+          --output_pickle "$4" \
+          --output_metadata "$5"
         
     args:
       - {inputPath: train_data}
       - {inputPath: test_data}
       - {inputPath: anomaly_data}
       - {inputValue: window_size}
-      - {inputValue: batch_size}
       - {outputPath: processed_data_pickle}
       - {outputPath: metadata_json}
