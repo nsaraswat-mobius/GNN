@@ -1,11 +1,8 @@
-name: Data loader with cdn v1
+name: Data loader with cdn v2
 
 inputs:
   - {name: cdn_url, type: String, description: 'CDN URL to download dataset file (CSV, JSON, or Parquet)'}
   - {name: split_size, type: Integer, default: "15", description: 'Test split size percent or fraction'}
-  - {name: target_column, type: String, description: 'Target column or comma-separated targets'}
-  
-  # NEW
   - {name: use_column, type: String, optional: true, description: 'Comma-separated columns to keep'}
   - {name: drop_columns, type: String, optional: true, description: 'Comma-separated columns to drop'}
 
@@ -44,7 +41,6 @@ implementation:
         parser = argparse.ArgumentParser()
         parser.add_argument('--cdn_url', required=True)
         parser.add_argument('--split_size', type=float, default=15)
-        parser.add_argument('--target_column', required=True)
         parser.add_argument('--use_column', default=None)
         parser.add_argument('--drop_columns', default=None)
         parser.add_argument('--train_data', required=True)
@@ -160,12 +156,6 @@ implementation:
             df.columns.tolist(),
             list(original_cols - set(df.columns))
         )
-
-        # ---------- Target handling ----------
-        target_cols = [c.strip() for c in args.target_column.split(",") if c.strip()]
-        missing_targets = [c for c in target_cols if c not in df.columns]
-        if missing_targets:
-            raise ValueError(f"Target columns missing: {missing_targets}")
 
         # Default anomaly detection settings
         anomaly_threshold = 0.05  # Fixed at 5%
@@ -285,8 +275,6 @@ implementation:
       - {inputValue: cdn_url}
       - --split_size
       - {inputValue: split_size}
-      - --target_column
-      - {inputValue: target_column}
       - --use_column
       - {inputValue: use_column}
       - --drop_columns
