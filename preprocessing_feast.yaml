@@ -1,4 +1,4 @@
-name: Preprocess Kubernetes Metrics for GNN
+name: Preprocess v2
 description: Preprocesses Kubernetes metrics for GNN anomaly detection - assumes feast_entity_id already dropped by data loader.
 inputs:
   - {name: train_data, type: Dataset}
@@ -18,7 +18,8 @@ implementation:
       - |
         set -e
         apt-get update && apt-get install -y --no-install-recommends wget
-        pip install pandas scikit-learn numpy torch
+        # Install ALL required dependencies
+        pip install pandas scikit-learn numpy torch pyarrow scipy
         
         # --- Main preprocessing script ---
         cat > preprocess_gnn.py << 'EOF'
@@ -30,6 +31,7 @@ implementation:
         import numpy as np
         import torch
         from sklearn.preprocessing import StandardScaler
+        from sklearn.neighbors import kneighbors_graph
         
         class DataWrapper:
             def __init__(self, data_dict):
@@ -80,8 +82,6 @@ implementation:
             return np.array(sequences)
         
         def build_graph_from_features(features, k=5):
-            from sklearn.neighbors import kneighbors_graph
-            
             n_samples = len(features)
             if n_samples < k:
                 k = max(1, n_samples - 1)
@@ -116,6 +116,7 @@ implementation:
             # Check which columns we actually have
             available_cols = [col for col in expected_cols if col in train_df.columns]
             print(f"Available columns: {available_cols}")
+            print(f"Missing columns: {set(expected_cols) - set(available_cols)}")
             
             # Use available columns
             train_df = train_df[available_cols]
@@ -217,12 +218,12 @@ implementation:
                 'window_size': window_size,
                 'k_neighbors': config['k_neighbors'],
                 'train_anomaly_ratio': 0.0,  # Training has only normal data
-                'val_anomaly_ratio': val_labels.mean(),
-                'test_anomaly_ratio': test_labels.mean(),
+                'val_anomaly_ratio': val_labels.mean() if len(val_labels) > 0 else 0,
+                'test_anomaly_ratio': test_labels.mean() if len(test_labels) > 0 else 0,
                 'adj_matrix_density': {
-                    'train': train_adj_matrix.mean(),
-                    'val': val_adj_matrix.mean(),
-                    'test': test_adj_matrix.mean()
+                    'train': float(train_adj_matrix.mean()),
+                    'val': float(val_adj_matrix.mean()) if len(val_node_features) > 0 else 0,
+                    'test': float(test_adj_matrix.mean()) if len(test_node_features) > 0 else 0
                 }
             }
             
@@ -274,16 +275,36 @@ implementation:
             args = parser.parse_args()
             
             print("Starting GNN preprocessing for Kubernetes metrics...")
+            print(f"Reading Parquet files from:")
+            print(f"  Train: {args.train_path}")
+            print(f"  Test: {args.test_path}")
+            print(f"  Anomaly: {args.anomaly_path}")
             
             # Load datasets (already filtered by data loader)
-            train_df = pd.read_parquet(args.train_path)
-            test_df = pd.read_parquet(args.test_path)
-            anomaly_df = pd.read_parquet(args.anomaly_path)
+            try:
+                train_df = pd.read_parquet(args.train_path)
+                test_df = pd.read_parquet(args.test_path)
+                anomaly_df = pd.read_parquet(args.anomaly_path)
+                print(" Successfully loaded all Parquet files")
+            except Exception as e:
+                print(f" Error loading Parquet files: {e}")
+                print("Trying alternative loading methods...")
+                
+                # Try reading as CSV as fallback
+                try:
+                    train_df = pd.read_csv(args.train_path)
+                    test_df = pd.read_csv(args.test_path)
+                    anomaly_df = pd.read_csv(args.anomaly_path)
+                    print(" Loaded as CSV files instead")
+                except Exception as e2:
+                    print(f" Failed to load files: {e2}")
+                    raise
             
             print(f"Loaded datasets:")
+            print(f"  Train shape: {train_df.shape}")
+            print(f"  Test shape: {test_df.shape}")
+            print(f"  Anomaly shape: {anomaly_df.shape}")
             print(f"  Train columns: {train_df.columns.tolist()}")
-            print(f"  Test columns: {test_df.columns.tolist()}")
-            print(f"  Anomaly columns: {anomaly_df.columns.tolist()}")
             
             # Configuration for GNN
             config = {
