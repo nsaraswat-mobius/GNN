@@ -1,4 +1,4 @@
-name: Preprocess v6
+name: Preprocess v7
 description: Preprocesses Kubernetes metrics for GNN anomaly detection - handles edge cases.
 inputs:
   - {name: train_data, type: Dataset}
