@@ -16,7 +16,7 @@ implementation:
       - |
         set -e
         apt-get update && apt-get install -y git
-        pip install pandas scikit-learn numpy
+        pip install pandas scikit-learn numpy torch
 
         # Create and change to a temporary working directory
         TMP_DIR=$(mktemp -d -t cst-gl-XXXXXXXXXX)
@@ -54,6 +54,7 @@ implementation:
         import os
         import pickle
         import pandas as pd
+        import torch
 
         class DataWrapper:
             def __init__(self, data_dict):
@@ -109,19 +110,41 @@ implementation:
                 y.append(data[i + seq_in_len : i + seq_in_len + seq_out_len])
             return np.array(x), np.array(y)
 
+        def load_pickle_safe(filepath):
+            try:
+                with open(filepath, 'rb') as f:
+                    return pickle.load(f)
+            except (pickle.UnpicklingError, AttributeError, EOFError, ImportError, IndexError) as e:
+                # Try loading with PyTorch's safer unpickler
+                try:
+                    data = torch.load(filepath, map_location='cpu', pickle_module=pickle)
+                    return data
+                except:
+                    # Try a different approach - load as numpy directly
+                    try:
+                        import joblib
+                        return joblib.load(filepath)
+                    except:
+                        raise ValueError(f"Failed to load {filepath}: {str(e)}")
+
         def load_dataset(dataset_dir, config, scaling_required=True):
             batch_size = config['batch_size']
             seq_in_len = config['seq_in_len']
             seq_out_len = config['seq_out_len']
 
-            # Load and process .pkl files
-            with open(os.path.join(dataset_dir, 'machine-1-1_train.pkl'), 'rb') as f:
-                train_raw = pickle.load(f)
-            train_raw = np.array(train_raw, dtype=np.float32) # Explicitly convert to float32
+            # Load and process .pkl files using safe loader
+            train_raw = load_pickle_safe(os.path.join(dataset_dir, 'machine-1-1_train.pkl'))
+            test_raw = load_pickle_safe(os.path.join(dataset_dir, 'machine-1-1_test.pkl'))
 
-            with open(os.path.join(dataset_dir, 'machine-1-1_test.pkl'), 'rb') as f:
-                test_raw = pickle.load(f)
-            test_raw = np.array(test_raw, dtype=np.float32) # Explicitly convert to float32
+            # Convert to numpy array if not already
+            if isinstance(train_raw, torch.Tensor):
+                train_raw = train_raw.cpu().numpy()
+            if isinstance(test_raw, torch.Tensor):
+                test_raw = test_raw.cpu().numpy()
+                
+            # Ensure float32 dtype
+            train_raw = np.array(train_raw, dtype=np.float32)
+            test_raw = np.array(test_raw, dtype=np.float32)
 
             x_train, y_train = create_sliding_windows(train_raw, seq_in_len, seq_out_len)
             x_test, y_test = create_sliding_windows(test_raw, seq_in_len, seq_out_len)
@@ -154,7 +177,6 @@ implementation:
             data['scaler'] = scaler
             
             # Add dummy masks for compatibility with TGCN example structure
-            # Replaced torch.ones with np.ones as torch is not a dependency here
             data['train_mask'] = np.ones(len(data['x_train']), dtype=bool)
             data['test_mask'] = np.ones(len(data['x_test']), dtype=bool)
             
@@ -162,7 +184,6 @@ implementation:
 
         if __name__ == '__main__':
             # Hardcoded config values based on typical STGNN setup and existing generate_training_data.py
-            # batch_size is a common value, seq_in_len is from --window_size, seq_out_len is a common forecast horizon
             config = {
                 'batch_size': 64,
                 'seq_in_len': 100,
@@ -181,13 +202,14 @@ implementation:
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             
             with open(output_path, 'wb') as f:
-                pickle.dump(data, f)
+                pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
 
             # Save the shape of x_train for the next script
             with open('x_train_shape.txt', 'w') as f:
                 f.write(','.join(map(str, data.x_train.shape)))
         EOF
-                PROCESSED_DATA_PICKLE_PATH="$3" python create_data_pickle.py
+        
+        PROCESSED_DATA_PICKLE_PATH="$3" python create_data_pickle.py
 
         # --- New Python script to create and save dummy weights ---
         cat > create_dummy_weights.py << EOF
@@ -214,7 +236,8 @@ implementation:
             with open(output_path, 'w') as f:
                 json.dump(dummy_weights, f, indent=2)
         EOF
-                        WEIGHT_OUT_PATH="$4" python create_dummy_weights.py
+        
+        WEIGHT_OUT_PATH="$4" python create_dummy_weights.py
 
     args:
       - {inputPath: train_data}
