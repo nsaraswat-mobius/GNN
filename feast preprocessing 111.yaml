@@ -1,4 +1,4 @@
-name: Preprocess dataset 1
+name: Preprocess dataset 2
 description: Takes raw SMD data, runs the preprocessing script, and outputs a pickled DataWrapper object with the processed data.
 inputs:
   - {name: train_data, type: Dataset}
@@ -16,7 +16,33 @@ implementation:
       - |
         set -e
         apt-get update && apt-get install -y git
-        pip install pandas scikit-learn numpy torch
+        pip install pandas scikit-learn numpy joblib torch
+        
+        # First, let's debug the input files
+        echo "Checking input file formats..."
+        python3 -c "
+        import pickle
+        import os
+        print('Current directory:', os.getcwd())
+        print('Files in current dir:', os.listdir('.'))
+        print('Files in input paths:')
+        import sys
+        for i, path in enumerate(['$0', '$1', '$2']):
+            print(f'Input {i}: {path}')
+            if os.path.exists(path):
+                print(f'  File exists, size: {os.path.getsize(path)} bytes')
+                try:
+                    with open(path, 'rb') as f:
+                        # Try to peek at the file content
+                        import binascii
+                        header = f.read(100)
+                        print(f'  First 100 bytes (hex): {binascii.hexlify(header)}')
+                        print(f'  First 100 bytes (ascii): {header}')
+                except Exception as e:
+                    print(f'  Error reading: {e}')
+            else:
+                print(f'  File does not exist')
+        "
 
         # Create and change to a temporary working directory
         TMP_DIR=$(mktemp -d -t cst-gl-XXXXXXXXXX)
@@ -29,9 +55,107 @@ implementation:
         # The input data from the previous component will be available at these paths
         # We need to move them to where the script expects them.
         mkdir -p generate_data
-        cp "$0" generate_data/machine-1-1_train.pkl
-        cp "$1" generate_data/machine-1-1_test.pkl
-        cp "$2" generate_data/machine-1-1_test_label.pkl
+        
+        # First, let's try to convert the input files to simple numpy arrays
+        cat > convert_inputs.py << 'EOF2'
+        import pickle
+        import numpy as np
+        import torch
+        import os
+        import sys
+        
+        def convert_file(input_path, output_path):
+            print(f"Converting {input_path} to {output_path}")
+            
+            # Try multiple loading methods
+            data = None
+            
+            # Method 1: Try torch.load
+            try:
+                print("  Trying torch.load...")
+                data = torch.load(input_path, map_location='cpu', pickle_module=pickle)
+                if isinstance(data, torch.Tensor):
+                    data = data.cpu().numpy()
+                print(f"  Success with torch.load, type: {type(data)}, shape: {data.shape if hasattr(data, 'shape') else 'N/A'}")
+            except Exception as e:
+                print(f"  torch.load failed: {e}")
+            
+            # Method 2: Try standard pickle
+            if data is None:
+                try:
+                    print("  Trying standard pickle...")
+                    with open(input_path, 'rb') as f:
+                        data = pickle.load(f)
+                    if isinstance(data, torch.Tensor):
+                        data = data.cpu().numpy()
+                    print(f"  Success with pickle, type: {type(data)}")
+                except Exception as e:
+                    print(f"  pickle failed: {e}")
+            
+            # Method 3: Try joblib
+            if data is None:
+                try:
+                    print("  Trying joblib...")
+                    import joblib
+                    data = joblib.load(input_path)
+                    if isinstance(data, torch.Tensor):
+                        data = data.cpu().numpy()
+                    print(f"  Success with joblib, type: {type(data)}")
+                except Exception as e:
+                    print(f"  joblib failed: {e}")
+            
+            # Convert to numpy array if possible
+            if data is not None:
+                if not isinstance(data, np.ndarray):
+                    try:
+                        data = np.array(data, dtype=np.float32)
+                    except:
+                        print(f"  Warning: Could not convert to numpy array, type: {type(data)}")
+                        return False
+                
+                # Save as simple numpy array
+                with open(output_path, 'wb') as f:
+                    pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+                print(f"  Saved to {output_path}, shape: {data.shape}")
+                return True
+            else:
+                print(f"  Error: Could not load {input_path}")
+                return False
+        
+        # Convert all input files
+        input_files = [
+            (sys.argv[1], 'generate_data/machine-1-1_train.pkl'),
+            (sys.argv[2], 'generate_data/machine-1-1_test.pkl'),
+            (sys.argv[3], 'generate_data/machine-1-1_test_label.pkl')
+        ]
+        
+        for inp, out in input_files:
+            if not convert_file(inp, out):
+                print(f"Failed to convert {inp}")
+                sys.exit(1)
+        EOF2
+        
+        python convert_inputs.py "$0" "$1" "$2"
+
+        # Verify the converted files
+        echo "Verifying converted files..."
+        python3 -c "
+        import pickle
+        import numpy as np
+        import os
+        
+        files = ['generate_data/machine-1-1_train.pkl', 
+                 'generate_data/machine-1-1_test.pkl', 
+                 'generate_data/machine-1-1_test_label.pkl']
+        
+        for f in files:
+            if os.path.exists(f):
+                with open(f, 'rb') as fp:
+                    data = pickle.load(fp)
+                print(f'{f}: type={type(data)}, shape={data.shape if hasattr(data, \"shape\") else \"N/A\"}, dtype={data.dtype if hasattr(data, \"dtype\") else \"N/A\"}')
+            else:
+                print(f'{f}: File not found')
+        "
 
         # The script has a bug, fix it with sed
         sed -i 's/train\.append(\[/pd.concat([train,/g' generate_data/generate_training_data.py
@@ -54,7 +178,6 @@ implementation:
         import os
         import pickle
         import pandas as pd
-        import torch
 
         class DataWrapper:
             def __init__(self, data_dict):
@@ -110,40 +233,18 @@ implementation:
                 y.append(data[i + seq_in_len : i + seq_in_len + seq_out_len])
             return np.array(x), np.array(y)
 
-        def load_pickle_safe(filepath):
-            try:
-                with open(filepath, 'rb') as f:
-                    return pickle.load(f)
-            except (pickle.UnpicklingError, AttributeError, EOFError, ImportError, IndexError) as e:
-                # Try loading with PyTorch's safer unpickler
-                try:
-                    data = torch.load(filepath, map_location='cpu', pickle_module=pickle)
-                    return data
-                except:
-                    # Try a different approach - load as numpy directly
-                    try:
-                        import joblib
-                        return joblib.load(filepath)
-                    except:
-                        raise ValueError(f"Failed to load {filepath}: {str(e)}")
-
         def load_dataset(dataset_dir, config, scaling_required=True):
             batch_size = config['batch_size']
             seq_in_len = config['seq_in_len']
             seq_out_len = config['seq_out_len']
 
-            # Load and process .pkl files using safe loader
-            train_raw = load_pickle_safe(os.path.join(dataset_dir, 'machine-1-1_train.pkl'))
-            test_raw = load_pickle_safe(os.path.join(dataset_dir, 'machine-1-1_test.pkl'))
-
-            # Convert to numpy array if not already
-            if isinstance(train_raw, torch.Tensor):
-                train_raw = train_raw.cpu().numpy()
-            if isinstance(test_raw, torch.Tensor):
-                test_raw = test_raw.cpu().numpy()
-                
-            # Ensure float32 dtype
+            # Load the pre-converted numpy arrays
+            with open(os.path.join(dataset_dir, 'machine-1-1_train.pkl'), 'rb') as f:
+                train_raw = pickle.load(f)
             train_raw = np.array(train_raw, dtype=np.float32)
+
+            with open(os.path.join(dataset_dir, 'machine-1-1_test.pkl'), 'rb') as f:
+                test_raw = pickle.load(f)
             test_raw = np.array(test_raw, dtype=np.float32)
 
             x_train, y_train = create_sliding_windows(train_raw, seq_in_len, seq_out_len)
@@ -209,7 +310,8 @@ implementation:
                 f.write(','.join(map(str, data.x_train.shape)))
         EOF
         
-        PROCESSED_DATA_PICKLE_PATH="$3" python create_data_pickle.py
+        export PROCESSED_DATA_PICKLE_PATH="$3"
+        python create_data_pickle.py
 
         # --- New Python script to create and save dummy weights ---
         cat > create_dummy_weights.py << EOF
@@ -237,7 +339,10 @@ implementation:
                 json.dump(dummy_weights, f, indent=2)
         EOF
         
-        WEIGHT_OUT_PATH="$4" python create_dummy_weights.py
+        export WEIGHT_OUT_PATH="$4"
+        python create_dummy_weights.py
+
+        echo "Preprocessing completed successfully!"
 
     args:
       - {inputPath: train_data}
