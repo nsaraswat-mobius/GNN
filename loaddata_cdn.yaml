@@ -1,4 +1,4 @@
-name: Data loader with cdn v2
+name: Data loader with cdn v3
 
 inputs:
   - {name: cdn_url, type: String, description: 'CDN URL to download dataset file (CSV, JSON, or Parquet)'}
@@ -47,6 +47,9 @@ implementation:
         parser.add_argument('--test_data', required=True)
         parser.add_argument('--anomaly_data', required=True)
         args = parser.parse_args()
+
+        # ---------- Handle $$ escaping ----------
+        args.cdn_url = args.cdn_url.replace("$$", "$$$")
 
         # ---------- Logging ----------
         logging.basicConfig(
