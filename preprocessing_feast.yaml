@@ -1,4 +1,4 @@
-name: Preprocess v3
+name: Preprocess v4
 description: Preprocesses Kubernetes metrics for GNN anomaly detection - handles edge cases.
 inputs:
   - {name: train_data, type: Dataset}
@@ -19,7 +19,7 @@ implementation:
         apt-get update && apt-get install -y --no-install-recommends wget
         pip install pandas scikit-learn numpy pyarrow scipy joblib
         
-        # --- Fixed preprocessing script ---
+        # --- Fixed preprocessing script with compatibility attributes ---
         cat > preprocess_gnn.py << 'EOF'
         import argparse
         import os
@@ -71,6 +71,47 @@ implementation:
                 adj_matrix = np.maximum(adj_matrix, adj_matrix.T)
                 
                 return adj_matrix
+        
+        # DataLoaderM class from old preprocessing for compatibility
+        class DataLoaderM(object):
+            def __init__(self, xs, ys, batch_size, pad_with_last_sample=True):
+                self.batch_size = batch_size
+                self.current_ind = 0
+                
+                # Handle case where ys is None
+                if ys is None:
+                    ys = xs  # Auto-regressive
+                
+                if pad_with_last_sample and len(xs) > 0:
+                    num_padding = (batch_size - (len(xs) % batch_size)) % batch_size
+                    if num_padding > 0:
+                        x_padding = np.repeat(xs[-1:], num_padding, axis=0)
+                        y_padding = np.repeat(ys[-1:], num_padding, axis=0)
+                        xs = np.concatenate([xs, x_padding], axis=0)
+                        ys = np.concatenate([ys, y_padding], axis=0)
+                
+                self.size = len(xs)
+                self.num_batch = int(self.size // self.batch_size)
+                self.xs = xs
+                self.ys = ys
+        
+            def shuffle(self):
+                if self.size > 0:
+                    permutation = np.random.permutation(self.size)
+                    self.xs = self.xs[permutation]
+                    self.ys = self.ys[permutation]
+        
+            def get_iterator(self):
+                self.current_ind = 0
+                def _wrapper():
+                    while self.current_ind < self.num_batch:
+                        start_ind = self.batch_size * self.current_ind
+                        end_ind = min(self.size, self.batch_size * (self.current_ind + 1))
+                        x_i = self.xs[start_ind: end_ind, ...]
+                        y_i = self.ys[start_ind: end_ind, ...]
+                        yield (x_i, y_i)
+                        self.current_ind += 1
+                return _wrapper()
         
         def preprocess_for_gnn(train_df, test_df, anomaly_df, config):
             print(f"Input shapes - Train: {train_df.shape}, Test: {test_df.shape}, Anomaly: {anomaly_df.shape}")
@@ -208,6 +249,41 @@ implementation:
                 val_labels = np.array([])
                 test_labels = np.array([])
             
+            # ========== CREATE COMPATIBLE DATA STRUCTURE ==========
+            # Reshape data for compatibility with old model
+            # Old model expects: [samples, sequence_length, nodes, features]
+            # We'll create dummy sequences
+            
+            batch_size = config.get('batch_size', 64)
+            
+            # For train data: reshape to [1, seq_len=num_nodes, 1, features]
+            # This is a hack but maintains compatibility
+            if len(train_node_features_scaled) > 0:
+                x_train_3d = train_node_features_scaled[np.newaxis, :, np.newaxis, :]
+                y_train_3d = train_node_features_scaled[np.newaxis, :, np.newaxis, :]  # Auto-regressive
+            else:
+                x_train_3d = np.array([])
+                y_train_3d = np.array([])
+            
+            if len(val_node_features) > 0:
+                x_val_3d = val_node_features[np.newaxis, :, np.newaxis, :]
+                y_val_3d = val_node_features[np.newaxis, :, np.newaxis, :]
+            else:
+                x_val_3d = np.array([])
+                y_val_3d = np.array([])
+            
+            if len(test_node_features) > 0:
+                x_test_3d = test_node_features[np.newaxis, :, np.newaxis, :]
+                y_test_3d = test_node_features[np.newaxis, :, np.newaxis, :]
+            else:
+                x_test_3d = np.array([])
+                y_test_3d = np.array([])
+            
+            # Create DataLoaderM objects for compatibility
+            train_loader = DataLoaderM(x_train_3d, y_train_3d, batch_size) if len(x_train_3d) > 0 else None
+            val_loader = DataLoaderM(x_val_3d, y_val_3d, batch_size) if len(x_val_3d) > 0 else None
+            test_loader = DataLoaderM(x_test_3d, y_test_3d, batch_size) if len(x_test_3d) > 0 else None
+            
             # ========== METADATA ==========
             metadata = {
                 'num_nodes_train': len(train_node_features_scaled),
@@ -228,8 +304,9 @@ implementation:
                 }
             }
             
-            # ========== DATA WRAPPER ==========
+            # ========== DATA WRAPPER WITH COMPATIBILITY ATTRIBUTES ==========
             data_dict = {
+                # New v3 attributes
                 'x_train': train_node_features_scaled,
                 'x_val': val_node_features,
                 'x_test': test_node_features,
@@ -244,9 +321,29 @@ implementation:
                 'test_windows': eval_windows[len(val_node_features):] if len(test_node_features) > 0 else np.array([]),
                 'scaler': scaler,
                 'metadata': metadata,
+                
+                # REQUIRED COMPATIBILITY ATTRIBUTES (from old preprocessing)
+                'train_mask': np.ones(len(train_node_features_scaled), dtype=bool) if len(train_node_features_scaled) > 0 else np.array([], dtype=bool),
+                'test_mask': np.ones(len(test_node_features), dtype=bool) if len(test_node_features) > 0 else np.array([], dtype=bool),
                 'num_nodes': len(train_node_features_scaled),
                 'num_features': train_data.shape[1],
-                'feature_dim': train_data.shape[1]
+                'feature_dim': train_data.shape[1],
+                
+                # DataLoader objects for compatibility
+                'train_loader': train_loader,
+                'val_loader': val_loader,
+                'test_loader': test_loader,
+                
+                # Additional compatibility attributes
+                'x_train_3d': x_train_3d,
+                'x_val_3d': x_val_3d,
+                'x_test_3d': x_test_3d,
+                'y_train_3d': y_train_3d,
+                'y_val_3d': y_val_3d,
+                'y_test_3d': y_test_3d,
+                
+                # Add batch_size for reference
+                'batch_size': batch_size,
             }
             
             return DataWrapper(data_dict), metadata
@@ -273,11 +370,12 @@ implementation:
             print(f"  Test: {test_df.shape[0]} samples")
             print(f"  Anomaly: {anomaly_df.shape[0]} samples")
             
-            # Adjust k_neighbors based on dataset size
+            # Configuration with batch_size for compatibility
             config = {
                 'window_size': args.window_size,
                 'k_neighbors': min(3, max(1, train_df.shape[0] // 30)),  # Adaptive k
-                'val_ratio': 0.3
+                'val_ratio': 0.3,
+                'batch_size': 64  # Same as model config
             }
             
             print(f"Configuration: {config}")
@@ -295,12 +393,14 @@ implementation:
             with open(args.output_metadata, 'w') as f:
                 json.dump(metadata, f, indent=2)
             
-            print(f"\\n Preprocessing complete!")
-            print(f" Dataset statistics:")
+            print(f"\\nPreprocessing complete!")
+            print(f"Dataset statistics:")
             print(f"  - Training nodes: {metadata['num_nodes_train']}")
             print(f"  - Validation nodes: {metadata['num_nodes_val']}")
             print(f"  - Test nodes: {metadata['num_nodes_test']}")
             print(f"  - Features: {metadata['num_features']}")
+            print(f"  - Added train_mask: {data_wrapper.train_mask.shape if hasattr(data_wrapper, 'train_mask') else 'Not found'}")
+            print(f"  - Added train_loader: {data_wrapper.train_loader is not None}")
         EOF
         
         # Run the preprocessing script
