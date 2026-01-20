@@ -1,4 +1,4 @@
-name: Preprocess dataset
+name: Preprocess dataset 1
 description: Takes raw SMD data, runs the preprocessing script, and outputs a pickled DataWrapper object with the processed data.
 inputs:
   - {name: train_data, type: Dataset}
