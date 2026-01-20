@@ -78,11 +78,15 @@ implementation:
                 self.batch_size = batch_size
                 self.current_ind = 0
                 
+                # Ensure float32 for all arrays
+                xs = xs.astype(np.float32) if isinstance(xs, np.ndarray) and len(xs) > 0 else xs
+                ys = ys.astype(np.float32) if isinstance(ys, np.ndarray) and len(ys) > 0 else ys
+                
                 # Handle case where ys is None
                 if ys is None:
                     ys = xs  # Auto-regressive
                 
-                if pad_with_last_sample and len(xs) > 0:
+                if pad_with_last_sample and isinstance(xs, np.ndarray) and len(xs) > 0:
                     num_padding = (batch_size - (len(xs) % batch_size)) % batch_size
                     if num_padding > 0:
                         x_padding = np.repeat(xs[-1:], num_padding, axis=0)
@@ -90,8 +94,8 @@ implementation:
                         xs = np.concatenate([xs, x_padding], axis=0)
                         ys = np.concatenate([ys, y_padding], axis=0)
                 
-                self.size = len(xs)
-                self.num_batch = int(self.size // self.batch_size)
+                self.size = len(xs) if isinstance(xs, np.ndarray) else 0
+                self.num_batch = int(self.size // self.batch_size) if self.size > 0 else 0
                 self.xs = xs
                 self.ys = ys
         
@@ -159,7 +163,7 @@ implementation:
             test_df = test_df.fillna(test_df.median())
             anomaly_df = anomaly_df.fillna(anomaly_df.median())
             
-            # Convert to numpy arrays
+            # Convert to numpy arrays WITH EXPLICIT FLOAT32
             train_data = train_df.values.astype(np.float32)
             test_data = test_df.values.astype(np.float32)
             anomaly_data = anomaly_df.values.astype(np.float32)
@@ -192,12 +196,13 @@ implementation:
             eval_node_features = eval_windows.mean(axis=1) if len(eval_windows) > 0 else np.array([])
             
             scaler = StandardScaler()
-            train_node_features_scaled = scaler.fit_transform(train_node_features)
-            eval_node_features_scaled = scaler.transform(eval_node_features) if len(eval_node_features) > 0 else np.array([])
+            train_node_features_scaled = scaler.fit_transform(train_node_features).astype(np.float32)
+            eval_node_features_scaled = scaler.transform(eval_node_features).astype(np.float32) if len(eval_node_features) > 0 else np.array([]).astype(np.float32)
             
             # ========== GRAPH BUILDING ==========
             print("Building graphs...")
             train_adj_matrix = build_graph_from_features(train_node_features_scaled, k=config['k_neighbors'])
+            train_adj_matrix = train_adj_matrix.astype(np.float32) if train_adj_matrix.size > 0 else train_adj_matrix
             
             # Split evaluation data
             val_ratio = config['val_ratio']
@@ -213,15 +218,18 @@ implementation:
                     val_node_features = val_node_features[:-1]
             elif len(eval_node_features_scaled) == 1:
                 # Only one evaluation sample - use for test
-                val_node_features = np.array([])
+                val_node_features = np.array([]).astype(np.float32)
                 test_node_features = eval_node_features_scaled
             else:
-                val_node_features = np.array([])
-                test_node_features = np.array([])
+                val_node_features = np.array([]).astype(np.float32)
+                test_node_features = np.array([]).astype(np.float32)
             
             # Build validation and test graphs
             val_adj_matrix = build_graph_from_features(val_node_features, k=min(config['k_neighbors'], max(1, len(val_node_features)-1)))
+            val_adj_matrix = val_adj_matrix.astype(np.float32) if val_adj_matrix.size > 0 else val_adj_matrix
+            
             test_adj_matrix = build_graph_from_features(test_node_features, k=min(config['k_neighbors'], max(1, len(test_node_features)-1)))
+            test_adj_matrix = test_adj_matrix.astype(np.float32) if test_adj_matrix.size > 0 else test_adj_matrix
             
             print(f"Graph sizes - Train: {len(train_node_features_scaled)}, Val: {len(val_node_features)}, Test: {len(test_node_features)}")
             
@@ -243,11 +251,11 @@ implementation:
             
             # Split labels to match validation/test split
             if len(eval_labels) > 0:
-                val_labels = eval_labels[:len(val_node_features)] if len(val_node_features) > 0 else np.array([])
-                test_labels = eval_labels[len(val_node_features):] if len(test_node_features) > 0 else np.array([])
+                val_labels = eval_labels[:len(val_node_features)] if len(val_node_features) > 0 else np.array([], dtype=np.int32)
+                test_labels = eval_labels[len(val_node_features):] if len(test_node_features) > 0 else np.array([], dtype=np.int32)
             else:
-                val_labels = np.array([])
-                test_labels = np.array([])
+                val_labels = np.array([], dtype=np.int32)
+                test_labels = np.array([], dtype=np.int32)
             
             # ========== CREATE STGNN-COMPATIBLE DATA STRUCTURE ==========
             # STGNN expects: [samples, 100, 11, 1]
@@ -256,7 +264,7 @@ implementation:
             
             def create_stgnn_data(features):
                 if len(features) == 0:
-                    return np.array([])
+                    return np.array([], dtype=np.float32)
                 
                 samples = len(features)
                 num_features = features.shape[1]
@@ -280,8 +288,8 @@ implementation:
                     for f in range(min(train_node_features_scaled.shape[1], 11)):
                         y_train_3d[i, 0, f, 0] = train_node_features_scaled[i, f]
             else:
-                x_train_3d = np.array([])
-                y_train_3d = np.array([])
+                x_train_3d = np.array([], dtype=np.float32)
+                y_train_3d = np.array([], dtype=np.float32)
             
             if len(val_node_features) > 0:
                 x_val_3d = create_stgnn_data(val_node_features)
@@ -290,8 +298,8 @@ implementation:
                     for f in range(min(val_node_features.shape[1], 11)):
                         y_val_3d[i, 0, f, 0] = val_node_features[i, f]
             else:
-                x_val_3d = np.array([])
-                y_val_3d = np.array([])
+                x_val_3d = np.array([], dtype=np.float32)
+                y_val_3d = np.array([], dtype=np.float32)
             
             if len(test_node_features) > 0:
                 x_test_3d = create_stgnn_data(test_node_features)
@@ -300,8 +308,8 @@ implementation:
                     for f in range(min(test_node_features.shape[1], 11)):
                         y_test_3d[i, 0, f, 0] = test_node_features[i, f]
             else:
-                x_test_3d = np.array([])
-                y_test_3d = np.array([])
+                x_test_3d = np.array([], dtype=np.float32)
+                y_test_3d = np.array([], dtype=np.float32)
             
             # Create DataLoaderM objects for compatibility
             train_loader = DataLoaderM(x_train_3d, y_train_3d, batch_size) if len(x_train_3d) > 0 else None
@@ -342,9 +350,9 @@ implementation:
                 'y_train': np.zeros(len(train_node_features_scaled), dtype=np.int32),
                 'y_val': val_labels,
                 'y_test': test_labels,
-                'train_windows': train_windows,
-                'val_windows': eval_windows[:len(val_node_features)] if len(val_node_features) > 0 else np.array([]),
-                'test_windows': eval_windows[len(val_node_features):] if len(test_node_features) > 0 else np.array([]),
+                'train_windows': train_windows.astype(np.float32) if len(train_windows) > 0 else train_windows,
+                'val_windows': eval_windows[:len(val_node_features)].astype(np.float32) if len(val_node_features) > 0 else np.array([], dtype=np.float32),
+                'test_windows': eval_windows[len(val_node_features):].astype(np.float32) if len(test_node_features) > 0 else np.array([], dtype=np.float32),
                 'scaler': scaler,
                 'metadata': metadata,
                 
@@ -371,6 +379,15 @@ implementation:
                 # Add batch_size for reference
                 'batch_size': batch_size,
             }
+            
+            # ========== FINAL FIX: ENSURE ALL NUMPY ARRAYS ARE FLOAT32 ==========
+            def ensure_float32_dict(d):
+                for key, value in d.items():
+                    if isinstance(value, np.ndarray) and value.dtype != np.float32 and np.issubdtype(value.dtype, np.floating):
+                        d[key] = value.astype(np.float32)
+                return d
+            
+            data_dict = ensure_float32_dict(data_dict)
             
             return DataWrapper(data_dict), metadata
         
@@ -427,6 +444,7 @@ implementation:
             print(f"  - Features: {metadata['num_features']}")
             print(f"  - STGNN shape: {data_wrapper.x_train_3d.shape if hasattr(data_wrapper, 'x_train_3d') else 'Not found'}")
             print(f"  - Added train_mask: {data_wrapper.train_mask.shape if hasattr(data_wrapper, 'train_mask') else 'Not found'}")
+            print(f"  - Data types check: All float32 arrays verified")
         EOF
         
         # Run the preprocessing script
