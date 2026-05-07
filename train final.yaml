@@ -1,4 +1,4 @@
-name: V Train Model 15
+name: V Train Model 16
 description: V Trains the model using provided data and config parameters.
 inputs:
   - {name: data_path, type: Dataset}           
@@ -102,6 +102,7 @@ implementation:
             data = raw
             data.x = torch.FloatTensor(raw.x_train)
             data.edge_index = None
+            data.train_mask = torch.BoolTensor(raw.train_mask)
         except Exception as e:
             print(f"Error loading data: {e}")
             exit(1)
