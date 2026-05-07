@@ -1,4 +1,4 @@
-name: V Train Model
+name: V Train Model 2
 description: V Trains the model using provided data and config parameters.
 inputs:
   - {name: data_path, type: Dataset}           
