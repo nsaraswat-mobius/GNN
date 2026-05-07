@@ -1,4 +1,4 @@
-name: V Train Model 2
+name: V Train Model
 description: V Trains the model using provided data and config parameters.
 inputs:
   - {name: data_path, type: Dataset}           
@@ -32,7 +32,11 @@ implementation:
         
         class DataWrapper:
           def __init__(self, data_dict):
-              self.__dict__.update(data_dict)
+              if isinstance(data_dict, dict):
+                  self.__dict__.update(data_dict)
+              else:
+                  self.__dict__.update(data_dict.__dict__)
+              print(f"DataWrapper attributes: {list(self.__dict__.keys())}")
 
         class StandardScaler():
             def __init__(self, mean, std):
@@ -93,12 +97,9 @@ implementation:
         # Load data
         try:
             with open(args.data_path, "rb") as f:
-                data = pickle.load(f)
-            print(f"Successfully loaded data. Type: {type(data)}")
-            data.x = torch.tensor(data.x_train, dtype=torch.float32)
-            data.y = torch.tensor(data.y_train, dtype=torch.float32)
-            data.edge_index = None
-            data.train_mask = torch.tensor(data.train_mask, dtype=torch.bool)
+                raw = pickle.load(f)
+            print(f"Successfully loaded data. Type: {type(raw)}")
+            data = DataWrapper(raw) if not isinstance(raw, DataWrapper) else raw
             if hasattr(data, 'x'):
                 print(f"Data shape: {data.x.shape}")
         except Exception as e:
