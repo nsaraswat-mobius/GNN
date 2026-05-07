@@ -1,4 +1,4 @@
-name: V Train Model 16
+name: V Train Model 18
 description: V Trains the model using provided data and config parameters.
 inputs:
   - {name: data_path, type: Dataset}           
@@ -101,6 +101,7 @@ implementation:
             print(f"Raw attributes: {list(raw.__dict__.keys())}")
             data = raw
             data.x = torch.FloatTensor(raw.x_train)
+            data.y = torch.FloatTensor(raw.y_train)
             data.edge_index = None
             data.train_mask = torch.BoolTensor(raw.train_mask)
         except Exception as e:
