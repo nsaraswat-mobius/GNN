@@ -1,4 +1,4 @@
-name: V Train Model 18
+name: V Train Model 19
 description: V Trains the model using provided data and config parameters.
 inputs:
   - {name: data_path, type: Dataset}           
@@ -100,10 +100,11 @@ implementation:
             print(f"Successfully loaded data. Type: {type(raw)}")
             print(f"Raw attributes: {list(raw.__dict__.keys())}")
             data = raw
-            data.x = torch.FloatTensor(raw.x_train)
-            data.y = torch.FloatTensor(raw.y_train)
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            data.x = torch.FloatTensor(raw.x_train).to(device)
+            data.y = torch.FloatTensor(raw.y_train).to(device)
             data.edge_index = None
-            data.train_mask = torch.BoolTensor(raw.train_mask)
+            data.train_mask = torch.BoolTensor(raw.train_mask).to(device)
         except Exception as e:
             print(f"Error loading data: {e}")
             exit(1)
