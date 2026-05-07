@@ -1,4 +1,4 @@
-name: V Train Model 13
+name: V Train Model 14
 description: V Trains the model using provided data and config parameters.
 inputs:
   - {name: data_path, type: Dataset}           
@@ -100,6 +100,8 @@ implementation:
             print(f"Successfully loaded data. Type: {type(raw)}")
             print(f"Raw attributes: {list(raw.__dict__.keys())}")
             data = raw
+            data.x = raw.x_train
+            data.edge_index = None
         except Exception as e:
             print(f"Error loading data: {e}")
             exit(1)
