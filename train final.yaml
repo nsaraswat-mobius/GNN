@@ -1,4 +1,4 @@
-name: V Train Model 12
+name: V Train Model 13
 description: V Trains the model using provided data and config parameters.
 inputs:
   - {name: data_path, type: Dataset}           
@@ -94,7 +94,6 @@ implementation:
         print(f"Config path: {args.config}")
         print(f"Output path: {args.trained_model}")
         
-# Load data
         try:
             with open(args.data_path, "rb") as f:
                 raw = pickle.load(f)
