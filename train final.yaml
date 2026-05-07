@@ -1,4 +1,4 @@
-name: V Train Model 11
+name: V Train Model 12
 description: V Trains the model using provided data and config parameters.
 inputs:
   - {name: data_path, type: Dataset}           
@@ -94,14 +94,13 @@ implementation:
         print(f"Config path: {args.config}")
         print(f"Output path: {args.trained_model}")
         
-        # Load data
+# Load data
         try:
             with open(args.data_path, "rb") as f:
                 raw = pickle.load(f)
             print(f"Successfully loaded data. Type: {type(raw)}")
-            data = DataWrapper(raw) if not isinstance(raw, DataWrapper) else raw
-            if hasattr(data, 'x'):
-                print(f"Data shape: {data.x.shape}")
+            print(f"Raw attributes: {list(raw.__dict__.keys())}")
+            data = raw
         except Exception as e:
             print(f"Error loading data: {e}")
             exit(1)
