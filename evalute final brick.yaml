@@ -1,4 +1,4 @@
-name: Nesy GNN Evaluate Model 1
+name: Nesy GNN Evaluate Model 2
 description: Evaluates the trained model and generates performance metrics.
 inputs:
   - {name: trained_model, type: Model}     # Trained model from train brick
@@ -100,9 +100,11 @@ implementation:
         # Load inputs
         print("Loading trained model...")
         # model = torch.load(args.trained_model)
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         model_name = config.get('model_name', 'tgcn')
         model = create_model(model_name, config)
-        model.load_state_dict(torch.load(args.trained_model, map_location=torch.device('cpu')))
+        model.load_state_dict(torch.load(args.trained_model, map_location=device))
+        model = model.to(device)
         
         #load data
         try:
@@ -111,7 +113,6 @@ implementation:
             print(f"Successfully loaded data. Type: {type(data)}")
             if hasattr(data, 'x'):
                 print(f"Data shape: {data.x.shape}")
-            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             data.x = torch.FloatTensor(data.x_test).to(device)
             data.y = torch.FloatTensor(data.y_test).to(device)
             data.edge_index = None
