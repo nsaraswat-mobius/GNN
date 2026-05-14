@@ -1,4 +1,4 @@
-name: V Train Model 19
+name: V Train Model 20
 description: V Trains the model using provided data and config parameters.
 inputs:
   - {name: data_path, type: Dataset}           
@@ -125,8 +125,8 @@ implementation:
         print("Loading model...")
         model_name = config.get('model_name', 'tgcn')
         model = create_model(model_name, config)
-        model.load_state_dict(torch.load(args.model, map_location=torch.device('cpu')))
-        # model = torch.load(args.model)
+        model.load_state_dict(torch.load(args.model, map_location=device))
+        model = model.to(device)
         epochs = config.get('epochs', 100)
         print(f"Training for {epochs} epochs")
         print(" Starting Model Training ")
